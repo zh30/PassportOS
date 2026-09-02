@@ -91,6 +91,17 @@ USB lines go through the same millivolt decoder as the keys. Useful commands:
 
 Quality gate: `cargo test -p passport-core`, then the release link above.
 
+Pushing a version tag (`vMAJOR.MINOR.PATCH`) runs GitHub Actions: host tests,
+release firmware for ESP32-C3, and a GitHub Release with ELF, BIN, partition
+table, SHA-256 sums, and the full notes. Example:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Do not use `--erase-all` when flashing a Release build.
+
 ## Hardware
 
 Facts live in `crates/passport-core/src/board.rs`. Do not duplicate them.

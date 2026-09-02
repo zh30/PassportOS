@@ -1,0 +1,125 @@
+# Official PassportOS firmware. Runs on version tags (example: v0.1.0).
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "v*.*.*-*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  ESPFLASH_VERSION: "4.5.0"
+
+jobs:
+  firmware:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Refusing tag '$TAG'. Use vMAJOR.MINOR.PATCH (optional prerelease suffix)."
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: riscv32imc-unknown-none-elf
+          components: rust-src
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Host tests
+        run: cargo test -p passport-core
+
+      - name: Release firmware
+        run: cargo build -p passport-os --release --target riscv32imc-unknown-none-elf
+
+      - name: Install espflash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/espflash.zip \
+            "https://github.com/esp-rs/espflash/releases/download/v${ESPFLASH_VERSION}/espflash-x86_64-unknown-linux-gnu.zip"
+          sudo unzip -o /tmp/espflash.zip -d /usr/local/bin
+          sudo chmod +x /usr/local/bin/espflash
+          espflash --version
+
+      - name: Package artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ELF_SRC="target/riscv32imc-unknown-none-elf/release/passport-os"
+          ELF_DST="dist/passport-os-${VERSION}-esp32c3.elf"
+          BIN_DST="dist/passport-os-${VERSION}-esp32c3.bin"
+          PART_DST="dist/partitions.csv"
+          cp "$ELF_SRC" "$ELF_DST"
+          cp partitions.csv "$PART_DST"
+          espflash save-image --chip esp32c3 --flash-size 8mb "$ELF_SRC" "$BIN_DST"
+          (
+            cd dist
+            sha256sum "$(basename "$ELF_DST")" "$(basename "$BIN_DST")" "$(basename "$PART_DST")" \
+              > SHA256SUMS.txt
+          )
+          echo "ELF_DST=$ELF_DST" >> "$GITHUB_ENV"
+          echo "BIN_DST=$BIN_DST" >> "$GITHUB_ENV"
+          echo "PART_DST=$PART_DST" >> "$GITHUB_ENV"
+          echo "IMAGE_BYTES=$(wc -c < "$BIN_DST" | tr -d ' ')" >> "$GITHUB_ENV"
+          ls -l dist
+
+      - name: Release notes
+        run: |
+          set -euo pipefail
+          chmod +x scripts/release-notes.sh
+          TAG="$TAG" \
+          COMMIT="${{ github.sha }}" \
+          ELF="$ELF_DST" \
+          BIN="$BIN_DST" \
+          PART="$PART_DST" \
+          SUMS="dist/SHA256SUMS.txt" \
+          RUSTC="$(rustc -V)" \
+          HOST="$(uname -srm)" \
+          IMAGE_BYTES="$IMAGE_BYTES" \
+            scripts/release-notes.sh > dist/RELEASE_NOTES.md
+          cp dist/RELEASE_NOTES.md "dist/PassportOS-${VERSION}-notes.md"
+          wc -l dist/RELEASE_NOTES.md
+
+      - name: GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          EXTRA=()
+          if [[ "$TAG" == *-* ]]; then
+            EXTRA+=(--prerelease)
+          fi
+          gh release create "$TAG" \
+            --title "PassportOS ${TAG}" \
+            --notes-file dist/RELEASE_NOTES.md \
+            "${EXTRA[@]}" \
+            "$ELF_DST" \
+            "$BIN_DST" \
+            "$PART_DST" \
+            dist/SHA256SUMS.txt \
+            "dist/PassportOS-${VERSION}-notes.md"
