@@ -6,7 +6,7 @@ use core::fmt::Write;
 use heapless::{String, Vec};
 
 use crate::app::{AppId, AppLifecycle, AppRegistry};
-use crate::board::{decode_millivolts, Key, KeyState, TYPICAL_RELEASED_MV};
+use crate::board::{Key, KeyState, TYPICAL_RELEASED_MV};
 use crate::compositor::{layout_tiles, TileLayout, TILES_PER_WORKSPACE, WORKSPACE_COUNT};
 use crate::console::{Command, HELP};
 use crate::input::{ButtonDecoder, ButtonEvent, LONG_PRESS_MS};
@@ -295,12 +295,13 @@ impl Shell {
             append(&mut out.lifecycle, ev_out.lifecycle);
             merge_side(&mut out.side, ev_out.side);
         }
-        // Release is emitted before Click. Clear only after this sample is
-        // Released so the wake Click cannot steal the launcher / game.
-        if self.swallow_wake && matches!(decode_millivolts(mv), KeyState::Released) {
+        // Decoder emits Release before Click, but only after RELEASE_DEBOUNCE_MS.
+        // Raw Released millivolts (firmware post-SPI dt≈1) must not drop the
+        // swallow, or the later Click steals launcher / game UI.
+        if self.swallow_wake && matches!(self.decoder.current(), KeyState::Released) {
             self.swallow_wake = false;
         }
-        let held = !matches!(decode_millivolts(mv), KeyState::Released);
+        let held = !matches!(self.decoder.current(), KeyState::Released);
         if self.status.charging || held || self.swallow_wake {
             self.idle_ms = 0;
         } else {

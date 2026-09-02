@@ -1,11 +1,13 @@
 //! Idle backlight-off standby. Drives shipped `Shell` + millivolt decoder, not a copy.
 
 use passport_core::app::{AppId, AppLifecycle};
-use passport_core::board::{decode_millivolts, Key, KeyState, TYPICAL_RELEASED_MV};
+use passport_core::board::{
+    decode_millivolts, Key, KeyState, INPUT_TICK_MS, TYPICAL_RELEASED_MV,
+};
 use passport_core::charging_from_samples;
 use passport_core::console::parse_line;
 use passport_core::flap::FLAP_APP_ID;
-use passport_core::input::ButtonEvent;
+use passport_core::input::{ButtonEvent, DEBOUNCE_MS, RELEASE_DEBOUNCE_MS};
 use passport_core::shell::{Overlay, Shell, SideEffect, IDLE_STANDBY_MS};
 
 const PULSE: AppId = AppId(1);
@@ -29,6 +31,23 @@ fn plugged_usb() -> bool {
 fn idle_released(sh: &mut Shell, ms: u32) -> passport_core::EventOutcome {
     assert_eq!(decode_millivolts(TYPICAL_RELEASED_MV), KeyState::Released);
     sh.tick_mv(TYPICAL_RELEASED_MV, ms)
+}
+
+/// Firmware cadence: 5 ms ADC samples, then a 1 ms post-SPI edge, then settle.
+fn press_until_down(sh: &mut Shell, key: Key) {
+    assert_eq!(decode_millivolts(key.typical_mv()), KeyState::Down(key));
+    let ticks = (DEBOUNCE_MS / INPUT_TICK_MS) + 1;
+    for _ in 0..ticks {
+        let _ = sh.tick_mv(key.typical_mv(), INPUT_TICK_MS);
+    }
+    assert_eq!(sh.decoder().current(), KeyState::Down(key));
+}
+
+fn firmware_release_edge(sh: &mut Shell) -> (passport_core::EventOutcome, passport_core::EventOutcome) {
+    // Post-SPI sample is often 1 ms — shorter than RELEASE_DEBOUNCE_MS.
+    let early = sh.tick_mv(TYPICAL_RELEASED_MV, 1);
+    let settled = sh.tick_mv(TYPICAL_RELEASED_MV, RELEASE_DEBOUNCE_MS);
+    (early, settled)
 }
 
 fn enter_standby(sh: &mut Shell) -> passport_core::EventOutcome {
@@ -196,6 +215,83 @@ fn wake_ok_does_not_reach_focused_flap() {
         "wake OK must not flap, got {:?}",
         out.lifecycle
     );
+
+    let out = sh.synth_click(Key::Ok);
+    assert!(
+        out.lifecycle.iter().any(|n| matches!(
+            n,
+            AppLifecycle::Input(id, ButtonEvent::Click(Key::Ok) | ButtonEvent::Press(Key::Ok))
+                if *id == FLAP_APP_ID
+        )),
+        "post-wake OK still reaches flap, got {:?}",
+        out.lifecycle
+    );
+}
+
+#[test]
+fn wake_release_at_firmware_cadence_does_not_steal_launcher() {
+    for key in [Key::Up, Key::Down, Key::Ok] {
+        let mut sh = shell_with_apps();
+        sh.enter_home();
+        let sel = sh.launcher().selected;
+        enter_standby(&mut sh);
+        press_until_down(&mut sh, key);
+        assert!(!sh.is_standby(), "{key:?} press must wake");
+        assert_eq!(sh.overlay(), Overlay::Launcher);
+        assert_eq!(sh.launcher().selected, sel);
+
+        let (early, settled) = firmware_release_edge(&mut sh);
+        assert_eq!(
+            sh.decoder().current(),
+            KeyState::Released,
+            "{key:?} after settle"
+        );
+        assert!(
+            early.lifecycle.is_empty() && settled.lifecycle.is_empty(),
+            "{key:?} 1 ms then {RELEASE_DEBOUNCE_MS} ms Released must not activate, early={:?} settled={:?}",
+            early.lifecycle,
+            settled.lifecycle
+        );
+        assert_eq!(sh.overlay(), Overlay::Launcher, "{key:?}");
+        assert_eq!(
+            sh.launcher().selected, sel,
+            "{key:?} Click after 1 ms Released must still be swallowed"
+        );
+
+        let moved = sh.synth_click(Key::Down);
+        assert_eq!(
+            sh.launcher().selected,
+            sel + 1,
+            "after firmware-cadence {key:?} wake, later click must move; side={:?}",
+            moved.side
+        );
+    }
+}
+
+#[test]
+fn wake_ok_at_firmware_cadence_does_not_reach_flap() {
+    let mut sh = shell_with_apps();
+    sh.register_app(FLAP_APP_ID, "flap").unwrap();
+    sh.enter_home();
+    sh.apply_command(parse_line("activate flap").unwrap());
+    enter_standby(&mut sh);
+    press_until_down(&mut sh, Key::Ok);
+    assert!(!sh.is_standby());
+    assert_eq!(sh.focused_app_name(), Some("flap"));
+
+    let (early, settled) = firmware_release_edge(&mut sh);
+    for (label, out) in [("dt=1", &early), ("dt=5", &settled)] {
+        assert!(
+            !out.lifecycle.iter().any(|n| matches!(
+                n,
+                AppLifecycle::Input(id, _) if *id == FLAP_APP_ID
+            )),
+            "wake OK {label} must not flap, got {:?}",
+            out.lifecycle
+        );
+    }
+    assert_eq!(sh.overlay(), Overlay::None);
+    assert_eq!(sh.focused_app_name(), Some("flap"));
 
     let out = sh.synth_click(Key::Ok);
     assert!(
