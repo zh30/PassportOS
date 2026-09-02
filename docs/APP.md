@@ -25,7 +25,7 @@ All constants live in `crates/passport-core/src/board.rs`. Do not duplicate them
 | USB Serial/JTAG | **GPIO18 / GPIO19** | Native ESP32-C3 USB. Console + flash. |
 | Wi-Fi | 2.4 GHz STA scan + connect | System **wifi**: pick an AP. Open nets join immediately; locked nets open the 3-key English IME. |
 | BLE | non-connectable advertising `PassportOS` | On demand. ESP32-C3 has **no Bluetooth Classic**. |
-| Light / deep sleep | RTC timer wake | Deep sleep restarts the application. |
+| Light / deep sleep | RTC timer wake | Deep sleep restarts the application. Unplugged **idle standby** (30 s, no keys) is only backlight PWM 0 — not this path. Any key restores brightness and is swallowed so it does not also fire UI. Charging (USB SOF / SOC-up) inhibits blanking. |
 
 ### NFC (NTAG213) — on the card, not on the MCU
 

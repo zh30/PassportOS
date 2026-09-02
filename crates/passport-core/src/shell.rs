@@ -6,7 +6,7 @@ use core::fmt::Write;
 use heapless::{String, Vec};
 
 use crate::app::{AppId, AppLifecycle, AppRegistry};
-use crate::board::{Key, TYPICAL_RELEASED_MV};
+use crate::board::{decode_millivolts, Key, KeyState, TYPICAL_RELEASED_MV};
 use crate::compositor::{layout_tiles, TileLayout, TILES_PER_WORKSPACE, WORKSPACE_COUNT};
 use crate::console::{Command, HELP};
 use crate::input::{ButtonDecoder, ButtonEvent, LONG_PRESS_MS};
@@ -18,6 +18,8 @@ use crate::theme::Theme;
 use crate::wifi::{WifiAction, WifiNet, WifiUi};
 
 const TICK_MS: u32 = 20;
+/// Unplugged idle before backlight-off standby. Not RTC `sleep light` / `sleep deep`.
+pub const IDLE_STANDBY_MS: u32 = 30_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Overlay {
@@ -121,6 +123,10 @@ pub struct Shell {
     theme: Theme,
     content_gen: u16,
     anim: u16,
+    idle_ms: u32,
+    standby: bool,
+    /// After a wake press, swallow Click/LongPress/Release from the same hold.
+    swallow_wake: bool,
 }
 
 impl Default for Shell {
@@ -146,6 +152,9 @@ impl Shell {
             theme: Theme::Dark,
             content_gen: 0,
             anim: 0,
+            idle_ms: 0,
+            standby: false,
+            swallow_wake: false,
         }
     }
 
@@ -185,6 +194,27 @@ impl Shell {
 
     pub fn overlay(&self) -> Overlay {
         self.overlay
+    }
+
+    /// Backlight-off idle standby (PWM 0). Overlay and focused app stay put.
+    pub fn is_standby(&self) -> bool {
+        self.standby
+    }
+
+    /// Plug / unplug. Charging cancels idle and restores the previous brightness
+    /// if the panel was already blanked.
+    pub fn set_charging(&mut self, on: bool) -> EventOutcome {
+        if self.status.charging != on {
+            self.status.charging = on;
+            self.dirty = true;
+        }
+        if on {
+            self.idle_ms = 0;
+            if self.standby {
+                return self.leave_standby();
+            }
+        }
+        EventOutcome::empty()
     }
 
     pub fn launcher(&self) -> &Launcher {
@@ -252,12 +282,32 @@ impl Shell {
 
     /// Feed one millivolt sample — the same entry point used by ADC and console inject.
     pub fn tick_mv(&mut self, mv: u16, dt_ms: u32) -> EventOutcome {
-        let events = self.decoder.feed(mv, dt_ms);
         let mut out = EventOutcome::empty();
+        if self.status.charging {
+            self.idle_ms = 0;
+            if self.standby {
+                merge_side(&mut out.side, self.leave_standby().side);
+            }
+        }
+        let events = self.decoder.feed(mv, dt_ms);
         for ev in events {
             let ev_out = self.handle_event(ev);
             append(&mut out.lifecycle, ev_out.lifecycle);
             merge_side(&mut out.side, ev_out.side);
+        }
+        // Release is emitted before Click. Clear only after this sample is
+        // Released so the wake Click cannot steal the launcher / game.
+        if self.swallow_wake && matches!(decode_millivolts(mv), KeyState::Released) {
+            self.swallow_wake = false;
+        }
+        let held = !matches!(decode_millivolts(mv), KeyState::Released);
+        if self.status.charging || held || self.swallow_wake {
+            self.idle_ms = 0;
+        } else {
+            self.idle_ms = self.idle_ms.saturating_add(dt_ms);
+            if !self.standby && self.idle_ms >= IDLE_STANDBY_MS {
+                merge_side(&mut out.side, self.enter_standby().side);
+            }
         }
         self.refresh_status();
         out
@@ -475,6 +525,16 @@ impl Shell {
     }
 
     pub fn handle_event(&mut self, ev: ButtonEvent) -> EventOutcome {
+        if self.standby {
+            let out = self.leave_standby();
+            if !matches!(ev, ButtonEvent::Release(_)) {
+                self.swallow_wake = true;
+            }
+            return out;
+        }
+        if self.swallow_wake {
+            return EventOutcome::empty();
+        }
         // Press/Release must not force a full LCD paint: SPI fill is tens of ms
         // and would skip ADC samples while a ladder press is still settling.
         if !matches!(ev, ButtonEvent::Press(_) | ButtonEvent::Release(_)) {
@@ -673,6 +733,29 @@ impl Shell {
                 EventOutcome::empty()
             }
             _ => EventOutcome::empty(),
+        }
+    }
+
+    fn enter_standby(&mut self) -> EventOutcome {
+        if self.standby {
+            return EventOutcome::empty();
+        }
+        self.standby = true;
+        EventOutcome {
+            lifecycle: Vec::new(),
+            side: SideEffect::SetBrightness(0),
+        }
+    }
+
+    fn leave_standby(&mut self) -> EventOutcome {
+        if !self.standby {
+            return EventOutcome::empty();
+        }
+        self.standby = false;
+        self.idle_ms = 0;
+        EventOutcome {
+            lifecycle: Vec::new(),
+            side: SideEffect::SetBrightness(self.status.brightness),
         }
     }
 

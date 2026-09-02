@@ -57,6 +57,6 @@ pub use wifi::{WifiAction, WifiNet, WifiPhase, WifiUi, WIFI_MAX_NETS, WIFI_VISIB
 pub use nfc::{decode_uri_tlv, encode_uri_tlv, mcu_read, mcu_write, NTAG213, NTAG213_USER_BYTES};
 pub use paint::{FrameSig, PaintPlan};
 pub use radio::{ExclusiveManager, Resource};
-pub use shell::{EventOutcome, Shell, SideEffect};
+pub use shell::{EventOutcome, Shell, SideEffect, IDLE_STANDBY_MS};
 pub use status::{charging_from_samples, RadioMode, StatusBar};
 pub use theme::{Palette, Theme};

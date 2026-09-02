@@ -9,5 +9,7 @@
 - System Wi-Fi: overlay + 3-key IME live in `passport-core`. Firmware `wifi_worker` keeps `WIFI` (scan then `connect_async`). Never await radio on the UI task. `SideEffect` is `Copy`; SSID/pass stay on `Shell`.
 - Flash factory app at `0x10000` (3 MB). Do not erase `cardid@0x356000` or `recovery@0x700000`. KV high-score page is `0x350000` (4 KB, between factory and cardid).
 - USB console is GPIO18/19 Serial/JTAG. UART0 TX is GPIO21 (backlight) — never enable it.
+- Unplugged idle standby (30 s, `IDLE_STANDBY_MS`) is `SideEffect::SetBrightness(0)` then restore; not `SleepLight` / `SleepDeep`. Wake keys are swallowed. Keep the 5 ms ADC loop while blanked; skip live SPI paints.
+- Unplugged idle standby (30 s, `IDLE_STANDBY_MS`) is `SideEffect::SetBrightness(0)` then restore; not `SleepLight` / `SleepDeep`. Wake keys are swallowed. Keep the 5 ms ADC loop while blanked; skip live SPI paints.
 - NTAG213 is a passive tag (no MCU bus). Firmware exposes NDEF encode + Tap app; `mcu_read`/`mcu_write` are `NoBus`. Power button is not a GPIO.
 - Quality: `cargo test -p passport-core` then `cargo build -p passport-os --release --target riscv32imc-unknown-none-elf`.

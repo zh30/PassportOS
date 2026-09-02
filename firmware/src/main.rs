@@ -500,25 +500,26 @@ async fn main(spawner: Spawner) {
             crate::apps::nfc::dispatch(&mut apps.nfc, &ev.lifecycle, mv);
             let desk = shell.overlay() == Overlay::None;
             let focused = shell.focused_app_name();
+            let live = $tick_flap && desk && !shell.is_standby();
             crate::apps::flap::dispatch(
                 &mut apps.flap,
                 &ev.lifecycle,
                 mv,
-                $tick_flap && desk && focused == Some("flap"),
+                live && focused == Some("flap"),
                 &mut kv,
             );
             crate::apps::stack::dispatch(
                 &mut apps.stack,
                 &ev.lifecycle,
                 mv,
-                $tick_flap && desk && focused == Some("stack"),
+                live && focused == Some("stack"),
                 &mut kv,
             );
             crate::apps::brick::dispatch(
                 &mut apps.brick,
                 &ev.lifecycle,
                 mv,
-                $tick_flap && desk && focused == Some("brick"),
+                live && focused == Some("brick"),
                 &mut kv,
             );
             if ev.side != SideEffect::None {
@@ -529,7 +530,7 @@ async fn main(spawner: Spawner) {
 
     macro_rules! request_game {
         ($frame_due:expr) => {
-            if shell.overlay() == Overlay::None {
+            if !shell.is_standby() && shell.overlay() == Overlay::None {
                 let want = match shell.focused_app_name() {
                     Some("flap") => apps.flap.redraw(),
                     Some("stack") => apps.stack.redraw(),
@@ -585,9 +586,9 @@ async fn main(spawner: Spawner) {
                 last_soc,
             );
             last_usb_sof = sof;
-            if charging != shell.status.charging {
-                shell.status.charging = charging;
-                shell.dirty = true;
+            let chg = shell.set_charging(charging);
+            if chg.side != SideEffect::None {
+                apply_hw_side!(chg.side);
             }
         }
 
@@ -602,7 +603,7 @@ async fn main(spawner: Spawner) {
                 got = true;
             }
         }
-        if frame_due && !got && shell.overlay() == Overlay::None {
+        if frame_due && !got && !shell.is_standby() && shell.overlay() == Overlay::None {
             match shell.focused_app_name() {
                 Some("flap") => crate::apps::flap::dispatch(&mut apps.flap, &[], 0, true, &mut kv),
                 Some("stack") => {
@@ -632,7 +633,7 @@ async fn main(spawner: Spawner) {
             }
         }
 
-        if shell.dirty {
+        if shell.dirty && !shell.is_standby() {
             let mark_flap = shell.overlay() == Overlay::None
                 && shell.focused_app_name() == Some("flap")
                 && apps.flap.redraw() != Redraw::None;

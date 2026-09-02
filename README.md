@@ -35,6 +35,11 @@ workspaces. Long OK is still home.
 for the password; open nets skip the IME), bluetooth, sleep, keys, about.
 Wi-Fi credentials stay in RAM (the 16-byte KV slot is already full).
 
+Unplugged, the backlight turns off after **30 s** with no keys (PWM 0, not RTC
+sleep). Any key restores the previous brightness without also moving the
+launcher, switching workspace, or reaching a game. Charging (USB host SOF or
+SOC rising) keeps the panel on; plugging in while blanked turns it back on.
+
 **Status bar**, left to right: **HH:MM**, radio, workspace dots, battery %
 (lightning when USB-C is supplying a host or SOC is rising). There is no
 battery-backed RTC — set the clock with USB `time 14:32` (last-set plus time
@@ -96,8 +101,8 @@ release firmware for ESP32-C3, and a GitHub Release with ELF, BIN, partition
 table, SHA-256 sums, and the full notes. Example:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 Do not use `--erase-all` when flashing a Release build.
