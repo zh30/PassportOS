@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+.idea/
+.vscode/
+.DS_Store
+*.elf
+*.bin
+*.map
+Cargo.lock
+!/Cargo.lock

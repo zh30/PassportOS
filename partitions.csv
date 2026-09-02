@@ -1,0 +1,9 @@
+# Name,   Type, SubType, Offset,   Size,     Flags
+# Keep factory at 0x10000/3MB, cardid at 0x356000, recovery at 0x700000
+# so official mini-program Recovery restore remains possible.
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x300000,
+kv,       data, fat,     0x350000, 0x1000,
+cardid,   data, nvs,     0x356000, 0x4000,
+recovery, app,  test,    0x700000, 0x100000,

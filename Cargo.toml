@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["crates/passport-core", "firmware"]
+default-members = ["crates/passport-core"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+version = "0.1.0"
+repository = "https://github.com/FoloToy/ai-passport"
+
+[workspace.dependencies]
+heapless = "0.8"
+
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+debug = false
+strip = "symbols"
+panic = "abort"
