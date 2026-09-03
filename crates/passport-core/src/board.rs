@@ -34,6 +34,9 @@ pub const PIN_I2S_BCLK: u8 = 5;
 pub const PIN_I2S_WS: u8 = 3;
 pub const PIN_I2S_DOUT: u8 = 2;
 pub const PIN_I2S_DIN: u8 = 4;
+/// RX only has DIN; BCLK/WS are on TX. C3 `sig_loopback` stalls RX DMA (one
+/// pop then silence). Keep false until pad-level clock share works.
+pub const I2S_RX_LOOPBACK_TX: bool = false;
 /// USB Serial/JTAG D- / D+ (reserved; do not reassign as GPIO).
 pub const PIN_USB_DM: u8 = 18;
 pub const PIN_USB_DP: u8 = 19;

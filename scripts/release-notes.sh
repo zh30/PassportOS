@@ -168,7 +168,8 @@ A healthy boot prints:
 ## What this image contains
 
 Compiled-in launcher apps: **Pulse**, **Tap** (NTAG213 facts), **Flap**,
-**Stack**, **Brick**, **System**.
+**Stack**, **Brick**, **Boo**, **Tune**, **System**. Home is three islands
+(Play / Tools / System); OK drills in, UP or Long OK in a group zooms out.
 
 System menu: brightness, appearance, Wi-Fi (scan / pick / 3-key English IME /
 join; open networks skip the IME), Bluetooth advertising, sleep, keys, about.

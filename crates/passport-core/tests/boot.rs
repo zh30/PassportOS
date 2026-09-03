@@ -1,9 +1,9 @@
 //! Host tests for the boot mark. No HAL.
 
 use passport_core::api::{Draw, MeteredDraw, NullDraw};
-use passport_core::board::{OS_NAME, LCD_W};
-use passport_core::boot::{title, BootAnim, BOOT_TICK_MS, STAMP_H, STAMP_W};
-use passport_core::compositor::{Rect, LIVE_SPI_BUDGET};
+use passport_core::board::{LCD_W, OS_NAME};
+use passport_core::boot::{BOOT_TICK_MS, BootAnim, STAMP_H, STAMP_W, title};
+use passport_core::compositor::{LIVE_SPI_BUDGET, Rect};
 use passport_core::theme::Palette;
 
 fn vp() -> Rect {

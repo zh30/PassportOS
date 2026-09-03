@@ -17,6 +17,8 @@ pub struct AppSlot {
     pub name: &'static str,
     pub running: bool,
     pub focused: bool,
+    /// Focused desk app should receive [`AppLifecycle::Mic`].
+    pub wants_mic: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,6 +28,7 @@ pub enum AppLifecycle {
     Focus(AppId),
     Blur(AppId),
     Input(AppId, crate::input::ButtonEvent),
+    Mic(AppId, crate::mic::MicEvent),
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +57,7 @@ impl AppRegistry {
                 name,
                 running: false,
                 focused: false,
+                wants_mic: false,
             })
             .map_err(|_| ())
     }
@@ -67,7 +71,9 @@ impl AppRegistry {
     }
 
     pub fn by_name(&self, name: &str) -> Option<&AppSlot> {
-        self.slots.iter().find(|s| s.name.eq_ignore_ascii_case(name))
+        self.slots
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(name))
     }
 
     pub fn slots(&self) -> &[AppSlot] {
@@ -128,5 +134,15 @@ impl AppRegistry {
 
     pub fn focused(&self) -> Option<&AppSlot> {
         self.slots.iter().find(|s| s.focused)
+    }
+
+    pub fn set_wants_mic(&mut self, id: AppId, on: bool) {
+        if let Some(slot) = self.get_mut(id) {
+            slot.wants_mic = on;
+        }
+    }
+
+    pub fn wants_mic(&self, id: AppId) -> bool {
+        self.get(id).is_some_and(|s| s.wants_mic)
     }
 }

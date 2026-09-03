@@ -9,10 +9,10 @@ use heapless::Vec;
 
 use crate::api::{Draw, Store};
 use crate::app::AppId;
-use crate::compositor::{rgb565_bytes, Rect, LIVE_SPI_BUDGET};
+use crate::board::Key;
+use crate::compositor::{LIVE_SPI_BUDGET, Rect, rgb565_bytes};
 use crate::input::ButtonEvent;
 use crate::theme::Palette;
-use crate::board::Key;
 
 pub const FLAP_APP_ID: AppId = AppId(4);
 
@@ -380,7 +380,15 @@ impl FlapWorld {
 
         match self.state {
             FlapState::Ready => {
-                center_text(draw, vp, vp.y + 120, "OK to flap", pal.label, COL_SKY, false);
+                center_text(
+                    draw,
+                    vp,
+                    vp.y + 120,
+                    "OK to flap",
+                    pal.label,
+                    COL_SKY,
+                    false,
+                );
                 if self.best > 0 {
                     let mut best = heapless::String::<16>::new();
                     let _ = write!(best, "best {}", self.best);
@@ -420,7 +428,15 @@ impl FlapWorld {
         );
         let mut score = heapless::String::<16>::new();
         let _ = write!(score, "{}", self.score);
-        center_text(draw, vp, card.y + 40, score.as_str(), pal.label, pal.grouped, true);
+        center_text(
+            draw,
+            vp,
+            card.y + 40,
+            score.as_str(),
+            pal.label,
+            pal.grouped,
+            true,
+        );
         let mut best = heapless::String::<16>::new();
         let _ = write!(best, "best {}", self.best);
         center_text(
@@ -432,7 +448,15 @@ impl FlapWorld {
             pal.grouped,
             false,
         );
-        center_text(draw, vp, card.y + 100, "OK retry", pal.label, pal.grouped, false);
+        center_text(
+            draw,
+            vp,
+            card.y + 100,
+            "OK retry",
+            pal.label,
+            pal.grouped,
+            false,
+        );
     }
 
     fn paint_live(&self, draw: &mut dyn Draw, vp: Rect, pal: Palette) {
@@ -572,15 +596,7 @@ fn clip_i16(x: i16, y: i16, w: i16, h: i16) -> Option<Rect> {
     }
 }
 
-fn center_text(
-    draw: &mut dyn Draw,
-    vp: Rect,
-    y: u16,
-    s: &str,
-    fg: u16,
-    bg: u16,
-    scale_2x: bool,
-) {
+fn center_text(draw: &mut dyn Draw, vp: Rect, y: u16, s: &str, fg: u16, bg: u16, scale_2x: bool) {
     let cw = if scale_2x { FONT_2X } else { FONT_W };
     let w = (s.len() as u16).saturating_mul(cw);
     let x = vp.x.saturating_add(vp.w.saturating_sub(w) / 2);
@@ -606,7 +622,10 @@ pub fn write_best(store: &mut dyn Store, n: u16) {
 /// Immediate flap. Click-on-release is too late: long-OK is home, and a
 /// 30 ms SPI fill used to swallow the release sample.
 pub fn is_flap_input(ev: ButtonEvent) -> bool {
-    matches!(ev, ButtonEvent::Press(Key::Ok) | ButtonEvent::Press(Key::Up))
+    matches!(
+        ev,
+        ButtonEvent::Press(Key::Ok) | ButtonEvent::Press(Key::Up)
+    )
 }
 
 /// Compile-time check: a live frame must not be a playfield fill.

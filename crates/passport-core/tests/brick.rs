@@ -3,10 +3,10 @@
 use passport_core::api::{Draw, MemoryStore, MeteredDraw, NullDraw, Store};
 use passport_core::board::{Key, LCD_H, LCD_W};
 use passport_core::brick::{
-    live_budget_holds, read_best, write_best, BrickState, BrickWorld, BEST_KEY, BRICK_H, BRICK_N,
-    BRICK_W, COLS, COL_BG, GAP, GRID_X, GRID_Y, PAD_H, WORLD_H, WORLD_W,
+    BEST_KEY, BRICK_H, BRICK_N, BRICK_W, BrickState, BrickWorld, COL_BG, COLS, GAP, GRID_X, GRID_Y,
+    PAD_H, WORLD_H, WORLD_W, live_budget_holds, read_best, write_best,
 };
-use passport_core::compositor::{rgb565_bytes, Rect, LIVE_SPI_BUDGET, STATUS_BAR_H};
+use passport_core::compositor::{LIVE_SPI_BUDGET, Rect, STATUS_BAR_H, rgb565_bytes};
 use passport_core::flap::Redraw;
 use passport_core::input::ButtonEvent;
 use passport_core::theme::Palette;
@@ -303,7 +303,10 @@ fn live_restore_stays_in_spi_budget() {
     w.mark_painted();
     w.tick();
     let b = w.live_spi_bytes();
-    assert!(b <= LIVE_SPI_BUDGET, "live restore {b} over {LIVE_SPI_BUDGET}");
+    assert!(
+        b <= LIVE_SPI_BUDGET,
+        "live restore {b} over {LIVE_SPI_BUDGET}"
+    );
     let mut n = NullDraw::new(vp());
     let mut m = MeteredDraw::new(&mut n);
     w.paint(&mut m, vp(), Redraw::Live, Palette::DARK);

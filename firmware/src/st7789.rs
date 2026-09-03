@@ -4,7 +4,7 @@ use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::SpiBus;
 
-use crate::font::{glyph, FONT_H, FONT_W};
+use crate::font::{FONT_H, FONT_W, glyph};
 
 pub const WIDTH: u16 = 240;
 pub const HEIGHT: u16 = 320;
@@ -90,21 +90,11 @@ where
     fn begin_pixels(&mut self, x0: u16, y0: u16, x1: u16, y1: u16) -> Result<(), E> {
         self.command(
             0x2A,
-            &[
-                (x0 >> 8) as u8,
-                x0 as u8,
-                (x1 >> 8) as u8,
-                x1 as u8,
-            ],
+            &[(x0 >> 8) as u8, x0 as u8, (x1 >> 8) as u8, x1 as u8],
         )?;
         self.command(
             0x2B,
-            &[
-                (y0 >> 8) as u8,
-                y0 as u8,
-                (y1 >> 8) as u8,
-                y1 as u8,
-            ],
+            &[(y0 >> 8) as u8, y0 as u8, (y1 >> 8) as u8, y1 as u8],
         )?;
         self.select(true);
         let _ = self.dc.set_low();
@@ -161,7 +151,14 @@ where
         Ok(())
     }
 
-    pub fn draw_text_2x(&mut self, mut x: u16, y: u16, text: &str, fg: u16, bg: u16) -> Result<(), E> {
+    pub fn draw_text_2x(
+        &mut self,
+        mut x: u16,
+        y: u16,
+        text: &str,
+        fg: u16,
+        bg: u16,
+    ) -> Result<(), E> {
         for c in text.bytes() {
             if x + FONT_W * 2 > WIDTH {
                 break;

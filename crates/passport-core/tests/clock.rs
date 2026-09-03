@@ -1,11 +1,11 @@
 //! Host tests for the status-bar wall clock.
 
+use passport_core::Command;
 use passport_core::api::MemoryStore;
-use passport_core::clock::{parse_hm, read_tod, write_tod, Clock};
+use passport_core::clock::{Clock, parse_hm, read_tod, write_tod};
 use passport_core::console::parse_line;
 use passport_core::paint::{FrameSig, PaintPlan};
 use passport_core::shell::Shell;
-use passport_core::Command;
 
 #[test]
 fn parse_and_format_roundtrip() {
@@ -45,7 +45,10 @@ fn store_roundtrip_minutes() {
 fn console_time_sets_status_and_dirties_bar() {
     let mut sh = Shell::new();
     assert_eq!(parse_line("time").unwrap(), Command::Time(None));
-    assert_eq!(parse_line("time 14:32").unwrap(), Command::Time(Some((14, 32))));
+    assert_eq!(
+        parse_line("time 14:32").unwrap(),
+        Command::Time(Some((14, 32)))
+    );
     assert!(parse_line("time 25:00").is_err());
     let out = sh.apply_command(parse_line("time 14:32").unwrap());
     assert_eq!(out.side, passport_core::shell::SideEffect::ClockSet);

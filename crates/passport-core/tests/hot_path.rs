@@ -1,18 +1,20 @@
 //! Live hot path: 5 ms ADC vs 20 ms sprites, shipped paint/compositor only.
 
 use passport_core::api::{Draw, MeteredDraw, NullDraw};
+use passport_core::board::Key;
 use passport_core::board::{FRAME_TICK_MS, INPUT_TICK_MS, LCD_H, LCD_W};
+use passport_core::boo::{BooWorld, GHOST_H, GHOST_W, MobKind};
 use passport_core::boot::BootAnim;
 use passport_core::brick::BrickWorld;
-use passport_core::compositor::{rgb565_bytes, spi_time_us, Rect, LIVE_SPI_BUDGET, STATUS_BAR_H};
+use passport_core::compositor::{LIVE_SPI_BUDGET, Rect, STATUS_BAR_H, rgb565_bytes, spi_time_us};
 use passport_core::console::parse_line;
-use passport_core::flap::{cadence_redraw, FlapWorld, Redraw, FLAP_APP_ID};
+use passport_core::flap::{FLAP_APP_ID, FlapWorld, Redraw, cadence_redraw};
 use passport_core::input::ButtonEvent;
 use passport_core::paint::{FrameSig, PaintPlan};
 use passport_core::shell::Shell;
 use passport_core::stack::StackWorld;
 use passport_core::theme::Palette;
-use passport_core::board::Key;
+use passport_core::tune::TuneWorld;
 
 fn vp() -> Rect {
     Rect {
@@ -100,7 +102,10 @@ fn shipped_live_paints_stay_inside_spi_budget() {
         flap.paint(fills, vp(), Redraw::Live, Palette::DARK);
     });
     assert!(bytes > 0);
-    assert!(bytes <= LIVE_SPI_BUDGET, "flap live {bytes} over {LIVE_SPI_BUDGET}");
+    assert!(
+        bytes <= LIVE_SPI_BUDGET,
+        "flap live {bytes} over {LIVE_SPI_BUDGET}"
+    );
     assert!(
         max_wh < u32::from(LCD_W) * u32::from(LCD_H - STATUS_BAR_H),
         "flap live filled {max_wh} px (a 240×298 wipe)"
@@ -115,7 +120,10 @@ fn shipped_live_paints_stay_inside_spi_budget() {
         stack.paint(m, vp(), Redraw::Live, Palette::DARK);
         stack.paint(fills, vp(), Redraw::Live, Palette::DARK);
     });
-    assert!(bytes <= LIVE_SPI_BUDGET, "stack live {bytes} over {LIVE_SPI_BUDGET}");
+    assert!(
+        bytes <= LIVE_SPI_BUDGET,
+        "stack live {bytes} over {LIVE_SPI_BUDGET}"
+    );
     assert!(max_wh < u32::from(LCD_W) * u32::from(LCD_H - STATUS_BAR_H));
 
     let mut brick = BrickWorld::new();
@@ -127,7 +135,46 @@ fn shipped_live_paints_stay_inside_spi_budget() {
         brick.paint(m, vp(), Redraw::Live, Palette::DARK);
         brick.paint(fills, vp(), Redraw::Live, Palette::DARK);
     });
-    assert!(bytes <= LIVE_SPI_BUDGET, "brick live {bytes} over {LIVE_SPI_BUDGET}");
+    assert!(
+        bytes <= LIVE_SPI_BUDGET,
+        "brick live {bytes} over {LIVE_SPI_BUDGET}"
+    );
+    assert!(max_wh < u32::from(LCD_W) * u32::from(LCD_H - STATUS_BAR_H));
+
+    let mut boo = BooWorld::new(1);
+    boo.start();
+    boo.place(120, 0, MobKind::Ghost);
+    boo.mark_painted();
+    boo.tick();
+    assert_eq!(boo.redraw(), Redraw::Live);
+    let (bytes, max_wh) = meter_live(|m, fills| {
+        boo.paint(m, vp(), Redraw::Live, Palette::DARK);
+        boo.paint(fills, vp(), Redraw::Live, Palette::DARK);
+    });
+    assert!(
+        bytes <= LIVE_SPI_BUDGET,
+        "boo live {bytes} over {LIVE_SPI_BUDGET}"
+    );
+    assert!(max_wh < u32::from(LCD_W) * u32::from(LCD_H - STATUS_BAR_H));
+    let full_body = rgb565_bytes(GHOST_W as u16, GHOST_H as u16).saturating_mul(2);
+    assert!(
+        bytes < full_body,
+        "boo scroll must be strips not a full ghost erase+draw ({bytes} vs body {full_body})"
+    );
+
+    let mut tune = TuneWorld::new();
+    tune.feed_hz(110);
+    tune.mark_painted();
+    tune.feed_hz(112);
+    assert_eq!(tune.redraw(), Redraw::Live);
+    let (bytes, max_wh) = meter_live(|m, fills| {
+        tune.paint(m, vp(), Redraw::Live, Palette::DARK);
+        tune.paint(fills, vp(), Redraw::Live, Palette::DARK);
+    });
+    assert!(
+        bytes <= LIVE_SPI_BUDGET,
+        "tune live {bytes} over {LIVE_SPI_BUDGET}"
+    );
     assert!(max_wh < u32::from(LCD_W) * u32::from(LCD_H - STATUS_BAR_H));
 }
 

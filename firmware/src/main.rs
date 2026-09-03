@@ -14,7 +14,7 @@ mod ui;
 use core::fmt::Write as _;
 
 use embassy_executor::Spawner;
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{Either, select};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant, Timer};
@@ -30,14 +30,14 @@ use esp_hal::{
     i2c::master::{Config as I2cConfig, I2c},
     i2s::master::{Channels, DataFormat, I2s, TdmConfig},
     ledc::{
+        LSGlobalClkSource, Ledc, LowSpeed,
         channel::{self, ChannelIFace},
         timer::{self, TimerIFace},
-        LSGlobalClkSource, Ledc, LowSpeed,
     },
     rtc_cntl::sleep::{LowPower, RtcSleepConfig},
     spi::{
-        master::{Config as SpiConfig, Spi},
         Mode,
+        master::{Config as SpiConfig, Spi},
     },
     time::Rate,
     timer::timg::TimerGroup,
@@ -46,27 +46,29 @@ use esp_hal::{
 use esp_println::println;
 use esp_radio::ble::controller::BleConnector;
 use esp_radio::wifi::{
-    scan::ScanConfig, sta::StationConfig, AuthenticationMethod, AuthenticationMethodConfig,
-    Config as WifiNetConfig, ControllerConfig, Password, Ssid, WifiController,
+    AuthenticationMethod, AuthenticationMethodConfig, Config as WifiNetConfig, ControllerConfig,
+    Password, Ssid, WifiController, scan::ScanConfig, sta::StationConfig,
 };
-use passport_core::board::{
-    battery_poll_due, decode_millivolts, idle_telemetry_due, FRAME_TICK_MS, I2C_CW2017_ADDR,
-    I2C_ES8311_ADDR, INPUT_TICK_MS, OS_NAME, PIN_USB_DM, PIN_USB_DP,
-};
-use passport_core::charging_from_samples;
-use passport_core::board::KeyState;
 use passport_core::api::App;
+use passport_core::board::KeyState;
+use passport_core::board::{
+    FRAME_TICK_MS, I2C_CW2017_ADDR, I2C_ES8311_ADDR, I2S_RX_LOOPBACK_TX, INPUT_TICK_MS, OS_NAME,
+    PIN_USB_DM, PIN_USB_DP, battery_poll_due, decode_millivolts, idle_telemetry_due,
+};
+use passport_core::boot::{BOOT_TICK_MS, BootAnim};
+use passport_core::charging_from_samples;
 use passport_core::console::parse_line;
-use passport_core::boot::{BootAnim, BOOT_TICK_MS};
+use passport_core::flap::{Redraw, cadence_redraw};
 use passport_core::paint::FrameSig;
-use passport_core::flap::{cadence_redraw, Redraw};
-use passport_core::shell::{Overlay, Shell, SideEffect};
+use passport_core::radio::Resource;
+use passport_core::shell::{EventOutcome, Overlay, Shell, SideEffect};
 use passport_core::wifi::WifiNet;
+use passport_core::{pcm16_le_level, pcm16_le_peak};
 use trouble_host::prelude::*;
 
 use crate::apps::Apps;
 use crate::st7789::St7789;
-use crate::ui::{overlay_name, paint, paint_boot, COL_BG};
+use crate::ui::{COL_BG, overlay_name, paint, paint_boot};
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -111,10 +113,14 @@ fn usb_sof_frame() -> u16 {
     unsafe { (core::ptr::read_volatile(FRAM_NUM as *const u32) & 0x7FF) as u16 }
 }
 
+fn fill_silence(buf: &mut [u8]) {
+    for b in buf.iter_mut() {
+        *b = 0;
+    }
+}
+
 fn fill_pcm(buf: &mut [u8], idx: &mut usize) {
-    let data = unsafe {
-        core::slice::from_raw_parts(SINE.as_ptr() as *const u8, SINE.len() * 2)
-    };
+    let data = unsafe { core::slice::from_raw_parts(SINE.as_ptr() as *const u8, SINE.len() * 2) };
     for b in buf.iter_mut() {
         *b = data[*idx];
         *idx += 1;
@@ -194,10 +200,8 @@ async fn main(spawner: Spawner) {
     }
 
     let mut adc_cfg = AdcConfig::new();
-    let mut btn_pin = adc_cfg.enable_pin_with_cal::<_, AdcCalCurve<_>>(
-        peripherals.GPIO0,
-        Attenuation::_11dB,
-    );
+    let mut btn_pin =
+        adc_cfg.enable_pin_with_cal::<_, AdcCalCurve<_>>(peripherals.GPIO0, Attenuation::_11dB);
     let mut adc = Adc::new(peripherals.ADC1, adc_cfg);
 
     let mut shell = Shell::new();
@@ -207,7 +211,15 @@ async fn main(spawner: Spawner) {
     let _ = shell.register_app(apps.flap.id(), apps.flap.name());
     let _ = shell.register_app(apps.stack.id(), apps.stack.name());
     let _ = shell.register_app(apps.brick.id(), apps.brick.name());
+    let _ = shell.register_app(apps.boo.id(), apps.boo.name());
+    let _ = shell.register_app(apps.tune.id(), apps.tune.name());
+    shell.set_wants_mic(apps.boo.id(), true);
+    shell.set_wants_mic(apps.tune.id(), true);
     let mut kv = crate::store::KvStore::open(peripherals.FLASH);
+    if let Some(n) = kv.factory_image_bytes() {
+        shell.set_factory_used(n);
+        println!("[boot] factory image {n} bytes");
+    }
     if let Some(mins) = passport_core::read_tod(&kv) {
         let _ = shell.status.clock.set_minutes(mins);
         println!("[clock] restore {}", shell.status.clock.format_hm());
@@ -274,7 +286,8 @@ async fn main(spawner: Spawner) {
         TdmConfig::new_tdm_philips()
             .with_sample_rate(Rate::from_hz(16_000))
             .with_data_format(DataFormat::Data16Channel16)
-            .with_channels(Channels::STEREO),
+            .with_channels(Channels::STEREO)
+            .with_signal_loopback(I2S_RX_LOOPBACK_TX),
     )
     .expect("i2s")
     .with_mclk(peripherals.GPIO6)
@@ -309,6 +322,9 @@ async fn main(spawner: Spawner) {
     let mut last_soc = shell.status.battery_soc;
     let mut last_input = Instant::now();
     let mut last_frame = Instant::now();
+    let mut mic_owns_i2s = false;
+    let mut mic_logged = false;
+    let mut mic_skip = 0u8;
 
     // Expands in `main` so button ticks and USB commands share one hardware path.
     macro_rules! apply_hw_side {
@@ -454,8 +470,7 @@ async fn main(spawner: Spawner) {
                     println!("[sleep] light 2000ms");
                     let _ = usb_tx.write_all(b"[sleep] light 2000ms\r\n").await;
                     lp.set_wakeup_deadline(
-                        esp_hal::time::Instant::now()
-                            + esp_hal::time::Duration::from_millis(2000),
+                        esp_hal::time::Instant::now() + esp_hal::time::Duration::from_millis(2000),
                     );
                     lp.sleep_light(RtcSleepConfig::default());
                     println!("[sleep] wake rtc");
@@ -493,9 +508,12 @@ async fn main(spawner: Spawner) {
     // No `[btn]` USB print here: Serial/JTAG writes on the 5 ms sample path
     // were the stall in on-device logs (`[btn] mv=304 down` / `rel` chatter).
     macro_rules! handle_keys {
-        ($mv:expr, $dt:expr, $tick_flap:expr) => {{
+        ($mv:expr, $dt:expr, $tick_flap:expr, $mic_notes:expr, $mic_lv:expr, $mic_hz:expr) => {{
             let mv = $mv;
-            let ev = shell.tick_mv(mv, $dt);
+            let mut ev = shell.tick_mv(mv, $dt);
+            for n in $mic_notes {
+                let _ = ev.lifecycle.push(*n);
+            }
             crate::apps::pulse::dispatch(&mut apps.pulse, &ev.lifecycle, mv);
             crate::apps::nfc::dispatch(&mut apps.nfc, &ev.lifecycle, mv);
             let desk = shell.overlay() == Overlay::None;
@@ -522,6 +540,24 @@ async fn main(spawner: Spawner) {
                 live && focused == Some("brick"),
                 &mut kv,
             );
+            crate::apps::boo::dispatch(
+                &mut apps.boo,
+                &ev.lifecycle,
+                mv,
+                live && focused == Some("boo"),
+                &mut kv,
+                $mic_lv,
+            );
+            crate::apps::tune::dispatch(
+                &mut apps.tune,
+                &ev.lifecycle,
+                mv,
+                live && focused == Some("tune"),
+                &mut kv,
+                $mic_lv,
+                $mic_hz,
+                Some(shell.pitch_buf()),
+            );
             if ev.side != SideEffect::None {
                 apply_hw_side!(ev.side);
             }
@@ -535,6 +571,8 @@ async fn main(spawner: Spawner) {
                     Some("flap") => apps.flap.redraw(),
                     Some("stack") => apps.stack.redraw(),
                     Some("brick") => apps.brick.redraw(),
+                    Some("boo") => apps.boo.redraw(),
+                    Some("tune") => apps.tune.redraw(),
                     _ => Redraw::None,
                 };
                 match cadence_redraw(want, $frame_due) {
@@ -579,12 +617,8 @@ async fn main(spawner: Spawner) {
             last_frame = start;
             ticks = ticks.wrapping_add(1);
             let sof = usb_sof_frame();
-            let charging = charging_from_samples(
-                sof,
-                last_usb_sof,
-                shell.status.battery_soc,
-                last_soc,
-            );
+            let charging =
+                charging_from_samples(sof, last_usb_sof, shell.status.battery_soc, last_soc);
             last_usb_sof = sof;
             let chg = shell.set_charging(charging);
             if chg.side != SideEffect::None {
@@ -592,14 +626,125 @@ async fn main(spawner: Spawner) {
             }
         }
 
+        let want_mic = shell.mic_listen();
+        let mut mic_level = None;
+        if want_mic {
+            if !mic_owns_i2s {
+                shell.mic_begin();
+                let prev = shell.exclusive.acquire(Resource::Audio);
+                if matches!(prev, Some(Resource::Wifi | Resource::Ble)) {
+                    apply_hw_side!(SideEffect::RadioOff);
+                    shell.status.radio = passport_core::RadioMode::Off;
+                }
+                // TX clocks the codec; RX slaves via sig_loopback. Start both
+                // DMA before poking the ADC so BCLK/WS already exist.
+                if tx_xfer.is_none() {
+                    if let Some(tx) = audio_tx.take() {
+                        let mut buf = dma_tx_stream_buffer!(4096, 1024);
+                        buf.push_with(|b| {
+                            fill_silence(b);
+                            b.len()
+                        });
+                        match tx.write(buf) {
+                            Ok(xfer) => tx_xfer = Some(xfer),
+                            Err((_, tx, _)) => audio_tx = Some(tx),
+                        }
+                    }
+                }
+                if rx_xfer.is_none() {
+                    if let Some(rx) = audio_rx.take() {
+                        let buf = dma_rx_stream_buffer!(4096, 1024);
+                        match rx.read(buf) {
+                            Ok(xfer) => rx_xfer = Some(xfer),
+                            Err((_, rx, _)) => audio_rx = Some(rx),
+                        }
+                    }
+                }
+                Timer::after(Duration::from_millis(20)).await;
+                if codec::es8311_start(&mut i2c).is_err() {
+                    println!("[mic] codec start fail");
+                } else {
+                    let r01 = codec::es8311_read(&mut i2c, 0x01).unwrap_or(0);
+                    let r14 = codec::es8311_read(&mut i2c, 0x14).unwrap_or(0);
+                    let r17 = codec::es8311_read(&mut i2c, 0x17).unwrap_or(0);
+                    println!("[mic] codec 01={r01:02x} 14={r14:02x} 17={r17:02x}");
+                }
+                mic_owns_i2s = true;
+                mic_logged = false;
+                mic_skip = 4;
+                println!("[mic] listen");
+            }
+            if let Some(xfer) = rx_xfer.as_mut() {
+                let mut tmp = [0u8; 256];
+                let n = xfer.pop(&mut tmp);
+                if n > 0 {
+                    shell.feed_pcm(&tmp[..n]);
+                }
+                if n > 0 && mic_skip > 0 {
+                    mic_skip -= 1;
+                } else if n > 0 {
+                    let lv = pcm16_le_level(&tmp[..n]);
+                    let pk = pcm16_le_peak(&tmp[..n]);
+                    mic_level = Some(lv);
+                    shell.note_mic_peak(pk);
+                    if !mic_logged {
+                        println!(
+                            "[mic] lv={lv} peak={pk} n={n} {:02x}{:02x} {:02x}{:02x} {:02x}{:02x} {:02x}{:02x}",
+                            tmp.get(0).copied().unwrap_or(0),
+                            tmp.get(1).copied().unwrap_or(0),
+                            tmp.get(2).copied().unwrap_or(0),
+                            tmp.get(3).copied().unwrap_or(0),
+                            tmp.get(4).copied().unwrap_or(0),
+                            tmp.get(5).copied().unwrap_or(0),
+                            tmp.get(6).copied().unwrap_or(0),
+                            tmp.get(7).copied().unwrap_or(0),
+                        );
+                        mic_logged = true;
+                    }
+                }
+            }
+        } else if mic_owns_i2s {
+            if let Some(xfer) = rx_xfer.take() {
+                let (rx, _) = xfer.stop();
+                audio_rx = Some(rx);
+            }
+            if let Some(xfer) = tx_xfer.take() {
+                let (tx, _) = xfer.stop();
+                audio_tx = Some(tx);
+            }
+            shell.exclusive.release(Resource::Audio);
+            mic_owns_i2s = false;
+        }
+
+        let mic_out = if let Some(lv) = mic_level {
+            shell.tick_mic(lv)
+        } else {
+            EventOutcome::empty()
+        };
+        let mic_lv = mic_level.unwrap_or(0);
+
         let mut got = false;
         if let Some(mv) = read_ladder!() {
-            handle_keys!(mv, dt, frame_due);
+            handle_keys!(
+                mv,
+                dt,
+                frame_due,
+                &mic_out.lifecycle,
+                mic_lv,
+                shell.mic_hz()
+            );
             got = true;
         } else {
             Timer::after(Duration::from_millis(1)).await;
             if let Some(mv) = read_ladder!() {
-                handle_keys!(mv, dt.saturating_add(1), frame_due);
+                handle_keys!(
+                    mv,
+                    dt.saturating_add(1),
+                    frame_due,
+                    &mic_out.lifecycle,
+                    mic_lv,
+                    shell.mic_hz()
+                );
                 got = true;
             }
         }
@@ -612,24 +757,57 @@ async fn main(spawner: Spawner) {
                 Some("brick") => {
                     crate::apps::brick::dispatch(&mut apps.brick, &[], 0, true, &mut kv)
                 }
+                Some("boo") => crate::apps::boo::dispatch(
+                    &mut apps.boo,
+                    &mic_out.lifecycle,
+                    0,
+                    true,
+                    &mut kv,
+                    mic_lv,
+                ),
+                Some("tune") => crate::apps::tune::dispatch(
+                    &mut apps.tune,
+                    &[],
+                    0,
+                    true,
+                    &mut kv,
+                    mic_lv,
+                    shell.mic_hz(),
+                    Some(shell.pitch_buf()),
+                ),
                 _ => {}
             }
+        } else if !got && !mic_out.lifecycle.is_empty() {
+            crate::apps::boo::dispatch(
+                &mut apps.boo,
+                &mic_out.lifecycle,
+                0,
+                false,
+                &mut kv,
+                mic_lv,
+            );
         }
         request_game!(frame_due);
 
         if let Some(xfer) = tx_xfer.as_mut() {
             if xfer.available_bytes() > 0 {
                 let _ = xfer.push_with(|buf| {
-                    fill_pcm(buf, &mut sine_idx);
+                    if mic_owns_i2s {
+                        fill_silence(buf);
+                    } else {
+                        fill_pcm(buf, &mut sine_idx);
+                    }
                     buf.len()
                 });
             }
         }
-        if let Some(xfer) = rx_xfer.as_mut() {
-            let mut tmp = [0u8; 256];
-            let n = xfer.pop(&mut tmp);
-            if n > 0 {
-                println!("[audio] record {n} bytes");
+        if !mic_owns_i2s {
+            if let Some(xfer) = rx_xfer.as_mut() {
+                let mut tmp = [0u8; 256];
+                let n = xfer.pop(&mut tmp);
+                if n > 0 {
+                    println!("[audio] record {n} bytes");
+                }
             }
         }
 
@@ -643,6 +821,12 @@ async fn main(spawner: Spawner) {
             let mark_brick = shell.overlay() == Overlay::None
                 && shell.focused_app_name() == Some("brick")
                 && apps.brick.redraw() != Redraw::None;
+            let mark_boo = shell.overlay() == Overlay::None
+                && shell.focused_app_name() == Some("boo")
+                && apps.boo.redraw() != Redraw::None;
+            let mark_tune = shell.overlay() == Overlay::None
+                && shell.focused_app_name() == Some("tune")
+                && apps.tune.redraw() != Redraw::None;
             shell.dirty = false;
             if paint(&mut lcd, &shell, &apps, &mut frame).is_err() {
                 println!("[boot] display paint failed");
@@ -656,6 +840,12 @@ async fn main(spawner: Spawner) {
                 if mark_brick {
                     apps.brick.mark_painted();
                 }
+                if mark_boo {
+                    apps.boo.mark_painted();
+                }
+                if mark_tune {
+                    apps.tune.mark_painted();
+                }
                 if shell.overlay() != last_overlay {
                     last_overlay = shell.overlay();
                     println!("[ui] painted overlay={}", overlay_name(last_overlay));
@@ -667,7 +857,7 @@ async fn main(spawner: Spawner) {
         let dt2 = last_input.elapsed().as_millis().clamp(1, 50) as u32;
         last_input = Instant::now();
         if let Some(mv) = read_ladder!() {
-            handle_keys!(mv, dt2, false);
+            handle_keys!(mv, dt2, false, &[], mic_lv, shell.mic_hz());
             request_game!(false);
         }
 
@@ -733,6 +923,24 @@ async fn main(spawner: Spawner) {
                                     false,
                                     &mut kv,
                                 );
+                                crate::apps::boo::dispatch(
+                                    &mut apps.boo,
+                                    &out.lifecycle,
+                                    mv,
+                                    false,
+                                    &mut kv,
+                                    0,
+                                );
+                                crate::apps::tune::dispatch(
+                                    &mut apps.tune,
+                                    &out.lifecycle,
+                                    mv,
+                                    false,
+                                    &mut kv,
+                                    0,
+                                    0,
+                                    None,
+                                );
                             }
                             Err(_) => {
                                 let _ = usb_tx.write_all(b"?\r\n").await;
@@ -792,8 +1000,7 @@ async fn wifi_worker(wifi: esp_hal::peripherals::WIFI<'static>) {
                             }
                             let open = matches!(
                                 ap.auth_method,
-                                None
-                                    | Some(AuthenticationMethod::None)
+                                None | Some(AuthenticationMethod::None)
                                     | Some(AuthenticationMethod::Owe)
                             );
                             if let Some(n) = wifi_net_from_ap(ssid, open, ap.signal_strength) {
@@ -905,5 +1112,3 @@ async fn ble_advertise(bt: esp_hal::peripherals::BT<'static>) {
     )
     .await;
 }
-
-

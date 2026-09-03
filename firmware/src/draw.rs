@@ -1,10 +1,10 @@
 //! ST7789 adapter for the unified [`passport_core::api::Draw`] trait.
 
+use passport_core::STATUS_BAR_H;
 use passport_core::api::Draw;
 use passport_core::compositor::Rect;
-use passport_core::STATUS_BAR_H;
 
-use crate::st7789::{St7789, HEIGHT, WIDTH};
+use crate::st7789::{HEIGHT, St7789, WIDTH};
 
 pub struct LcdDraw<'a, SPI, DC, CS> {
     lcd: &'a mut St7789<SPI, DC, CS>,

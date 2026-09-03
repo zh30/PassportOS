@@ -19,7 +19,7 @@ All constants live in `crates/passport-core/src/board.rs`. Do not duplicate them
 | Backlight PWM | **GPIO21** LEDC 5 kHz 10-bit | UART0 TX defaults to GPIO21 — never use UART0 as the console. |
 | Buttons UP / DOWN / OK | **GPIO0** ADC1_CH0 resistor ladder | Windows `{[0,150),[150,447),[447,1900)}` mV. Typical 0 / ~300 / ~595 / **3300 released**. Do **not** create a second ADC1 unit. Do **not** enable the internal pull-up. |
 | I2C0 | SDA **GPIO10**, SCL **GPIO7** | Shared by ES8311 and CW2017. Reuse this bus; never `I2c::new` a second time on I2C0. |
-| ES8311 codec | I2C **0x18** | Playback (DAC) + microphone (ADC). |
+| ES8311 codec | I2C **0x18** | Playback (DAC) + microphone (ADC). Init table in `passport-core::es8311` — clock manager `0x01` must be `0x3F` (ADC clocks on). |
 | I2S0 | MCLK **GPIO6**, BCLK **GPIO5**, WS **GPIO3**, DOUT **GPIO2**, DIN **GPIO4** | 16-bit stereo, 16 kHz, Philips I2S, MCU master, codec slave. Stream PCM; do not allocate a 96 KB capture buffer. |
 | CW2017 fuel gauge | I2C **0x63** | Optional. Soft-fail if the chip NACKs. Charging bolt = USB-C SOF (host on the bus) or SOC rising. |
 | USB Serial/JTAG | **GPIO18 / GPIO19** | Native ESP32-C3 USB. Console + flash. |
@@ -77,7 +77,15 @@ pub trait App {
 Lifecycle hooks default to no-ops. `draw` is required.
 
 `Cx` exposes `draw`, `audio`, `store`, `radio`, `power`, `battery`,
-`brightness`, and `adc_mv()` (ladder voltage only — keys arrive via `on_key`).
+`brightness`, `adc_mv()` (ladder voltage only — keys arrive via `on_key`),
+`mic_level()` (0..=255 RMS — shouts arrive via `on_mic`), and `mic_hz()`
+(AMDF pitch from `Shell::feed_pcm`, 0 if silent).
+
+Microphone is a system input, like the keys. Firmware converts I2S PCM with
+`pcm16_le_level` and calls `Shell::tick_mic`. Opt in with
+`shell.set_wants_mic(id, true)`; only a focused desk app that opted in gets
+`AppLifecycle::Mic`. Wi-Fi / BLE / I2S stay exclusive. Do not open a second
+I2S or a 96 KB capture buffer.
 
 **Invariants**
 
@@ -105,16 +113,20 @@ skip a tap.
 | Action | Binding |
 | --- | --- |
 | Open/close launcher | **OK long** (Super analogue) |
+| Home islands | **Play** / **Tools** / **System** — first screen, no scroll |
+| Drill in / zoom out | **OK** enters an island; **UP** on the first app returns |
 | Move selection / focus | **UP / DOWN** click |
 | Activate | **OK** click |
 | In **Flap** | **OK** or **UP** **press** flaps (not click-on-release) |
 | In **Stack** | **OK** **press** drops the sliding slab |
 | In **Brick** | **UP / DOWN** move the paddle, **OK** **press** serves |
+| In **Boo** | shout (or **OK press**) to scare a ghost on the line. Yellow king = stay quiet. After score 4, UP/DOWN pick a lane. |
+| In **Tune** | **OK click** cycles guitar / ukulele / violin. **UP/DOWN** pick the string. Play it; the needle is cents. |
 | In a game | UP/DOWN (click or long) stay in the game — they do not switch tiles or workspaces. **OK long** is still home. |
 | Workspace 1 | **UP long** (not while a game is focused) |
 | Workspace 2 | **DOWN long** (not while a game is focused) |
 | System menu | launcher item `system` |
-| Keys / About | system menu items |
+| Keys / About | system menu items. About: UP/DOWN flips product copy ↔ factory used/free. OK back. |
 | Wi-Fi | system **wifi** — UP/DN pick AP, OK join. Locked: IME (UP/DN move, OK type, **go** submit, **x** back). Open nets skip the IME. |
 | Light / Dark | system menu **appearance** |
 
@@ -151,7 +163,8 @@ Long OK is home. Bests are stored in the 4 KB KV page at `0x350000` (not
 | `brightness 0-100` | PWM backlight |
 | `radio wifi\|ble\|off` | Wi-Fi overlay (scan/pick/IME/join) / BLE advertise / radio off |
 | `sleep light\|deep` | RTC-wake light 2 s / deep 5 s |
-| `audio beep\|rec` | Playback / microphone path |
+| `audio beep\|rec` | Playback / raw I2S record (debug) |
+| `mic` | Last system mic level and shout/peak thresholds |
 | `probe` | I2C probe `0x18` and `0x63` |
 | `keys` / `about` / `menu` / `help` | Cheatsheet / about / system menu / help |
 | `theme dark\|light\|toggle` | Appearance. Boot is **dark** (light full-panel fills 花屏 on this ST7789). |

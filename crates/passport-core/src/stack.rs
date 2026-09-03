@@ -9,7 +9,7 @@ use heapless::Vec;
 use crate::api::{Draw, Store};
 use crate::app::AppId;
 use crate::board::Key;
-use crate::compositor::{rgb565_bytes, Rect, LIVE_SPI_BUDGET};
+use crate::compositor::{LIVE_SPI_BUDGET, Rect, rgb565_bytes};
 use crate::flap::Redraw;
 use crate::input::ButtonEvent;
 use crate::theme::Palette;
@@ -173,7 +173,10 @@ impl StackWorld {
         } else {
             self.scene_dirty = true;
         }
-        self.mover.x = self.mover.x.saturating_add(self.dir.saturating_mul(self.speed));
+        self.mover.x = self
+            .mover
+            .x
+            .saturating_add(self.dir.saturating_mul(self.speed));
         if self.mover.x <= 0 {
             self.mover.x = 0;
             self.dir = 1;
@@ -393,7 +396,15 @@ impl StackWorld {
         );
         let mut score = heapless::String::<16>::new();
         let _ = write!(score, "{}", self.score);
-        center_text(draw, vp, card.y + 40, score.as_str(), pal.label, pal.grouped, true);
+        center_text(
+            draw,
+            vp,
+            card.y + 40,
+            score.as_str(),
+            pal.label,
+            pal.grouped,
+            true,
+        );
         let mut best = heapless::String::<16>::new();
         let _ = write!(best, "best {}", self.best);
         center_text(
@@ -405,7 +416,15 @@ impl StackWorld {
             pal.grouped,
             false,
         );
-        center_text(draw, vp, card.y + 100, "OK retry", pal.label, pal.grouped, false);
+        center_text(
+            draw,
+            vp,
+            card.y + 100,
+            "OK retry",
+            pal.label,
+            pal.grouped,
+            false,
+        );
     }
 }
 
@@ -413,11 +432,7 @@ fn overlap(a: Slab, b: Slab) -> Option<Slab> {
     let x = a.x.max(b.x);
     let x2 = (a.x + a.w).min(b.x + b.w);
     let w = x2 - x;
-    if w <= 0 {
-        None
-    } else {
-        Some(Slab { x, w })
-    }
+    if w <= 0 { None } else { Some(Slab { x, w }) }
 }
 
 fn slab_rect(s: Slab, y: i16) -> Option<Rect> {
@@ -450,15 +465,7 @@ fn blit(draw: &mut dyn Draw, vp: Rect, r: Rect, rgb: u16) {
     );
 }
 
-fn center_text(
-    draw: &mut dyn Draw,
-    vp: Rect,
-    y: u16,
-    s: &str,
-    fg: u16,
-    bg: u16,
-    scale_2x: bool,
-) {
+fn center_text(draw: &mut dyn Draw, vp: Rect, y: u16, s: &str, fg: u16, bg: u16, scale_2x: bool) {
     let cw = if scale_2x { FONT_2X } else { FONT_W };
     let w = (s.len() as u16).saturating_mul(cw);
     let x = vp.x.saturating_add(vp.w.saturating_sub(w) / 2);

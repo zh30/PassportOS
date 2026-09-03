@@ -1,13 +1,13 @@
 //! Wi-Fi picker + 3-key English IME. Drives shipped `Ime` / `WifiUi` / `Shell`.
 
+use passport_core::board::Key;
 use passport_core::console::parse_line;
-use passport_core::ime::{key_at, Ime, ImeAction, ImeKey, IME_KEY_COUNT, IME_ROWS};
+use passport_core::ime::{IME_KEY_COUNT, IME_ROWS, Ime, ImeAction, ImeKey, key_at};
 use passport_core::input::ButtonEvent;
-use passport_core::menu::{MenuAction, MENU_ITEMS};
+use passport_core::menu::{MENU_ITEMS, MenuAction};
 use passport_core::paint::{FrameSig, PaintPlan};
 use passport_core::shell::{Overlay, Shell, SideEffect};
-use passport_core::wifi::{WifiNet, WifiPhase, WIFI_VISIBLE};
-use passport_core::board::Key;
+use passport_core::wifi::{WIFI_VISIBLE, WifiNet, WifiPhase};
 
 fn find_char(ch: char) -> usize {
     let want = ch.to_ascii_lowercase();
@@ -155,7 +155,11 @@ fn menu_wifi_and_console_open_scan_overlay() {
 
     let from_console = Shell::new().apply_command(parse_line("radio wifi").unwrap());
     assert_eq!(from_btn.side, from_console.side);
-    assert!(from_console.reply.contains("radio=wifi"), "{}", from_console.reply);
+    assert!(
+        from_console.reply.contains("radio=wifi"),
+        "{}",
+        from_console.reply
+    );
 }
 
 #[test]
@@ -315,7 +319,10 @@ fn paint_plan_wifi_phase_change_wipes_body() {
     let plan = PaintPlan::diff(Some(prev), FrameSig::capture(&sh));
     assert!(plan.wipe_content);
     assert!(plan.wifi);
-    assert_eq!(plan.wipe_rows(), passport_core::board::LCD_H - passport_core::compositor::STATUS_BAR_H);
+    assert_eq!(
+        plan.wipe_rows(),
+        passport_core::board::LCD_H - passport_core::compositor::STATUS_BAR_H
+    );
 
     sh.apply_wifi_scan(&sample_nets());
     let prev = FrameSig::capture(&sh);

@@ -1,16 +1,16 @@
 //! Host tests for Stack. No HAL.
 
 use passport_core::api::{Draw, MemoryStore, MeteredDraw, NullDraw, Store};
+use passport_core::board::Key;
 use passport_core::board::{LCD_H, LCD_W};
-use passport_core::compositor::{Rect, LIVE_SPI_BUDGET, STATUS_BAR_H};
+use passport_core::compositor::{LIVE_SPI_BUDGET, Rect, STATUS_BAR_H};
 use passport_core::flap::Redraw;
 use passport_core::input::ButtonEvent;
 use passport_core::stack::{
-    is_stack_input, live_budget_holds, read_best, write_best, StackState, StackWorld, BASE_W,
-    BEST_KEY, COL_BG, COL_MOVE, MIN_W, START_SPEED, WORLD_W,
+    BASE_W, BEST_KEY, COL_BG, COL_MOVE, MIN_W, START_SPEED, StackState, StackWorld, WORLD_W,
+    is_stack_input, live_budget_holds, read_best, write_best,
 };
 use passport_core::theme::Palette;
-use passport_core::board::Key;
 
 fn vp() -> Rect {
     Rect {
@@ -176,8 +176,7 @@ fn live_slide_does_not_repaint_the_overlap() {
     assert_eq!(ops[0].1, COL_BG);
     assert_eq!(ops[1].1, COL_MOVE);
     assert_eq!(
-        ops[0].0.w,
-        START_SPEED as u16,
+        ops[0].0.w, START_SPEED as u16,
         "must not refill the whole slab ({})",
         ops[0].0.w
     );
@@ -202,7 +201,11 @@ fn live_slide_keeps_overlap_yellow() {
     let y = vp().y + (w.mover_y() as u16) + 4;
     // Pixel that stayed under the slab must still be yellow, not COL_BG.
     let stay_x = vp().x + (x0 + START_SPEED + 4).max(0) as u16;
-    assert_eq!(fb.get(stay_x, y), COL_MOVE, "overlap was flashed to background");
+    assert_eq!(
+        fb.get(stay_x, y),
+        COL_MOVE,
+        "overlap was flashed to background"
+    );
     let vacated_x = vp().x + x0.max(0) as u16;
     assert_eq!(fb.get(vacated_x, y), COL_BG);
     let lead_x = vp().x + (w.mover.x + w.mover.w - 1).max(0) as u16;

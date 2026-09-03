@@ -89,11 +89,7 @@ pub fn read_tod(store: &dyn Store) -> Option<u16> {
     match store.get(TIME_KEY, &mut buf) {
         Some(2) => {
             let mins = u16::from_le_bytes(buf);
-            if mins < 24 * 60 {
-                Some(mins)
-            } else {
-                None
-            }
+            if mins < 24 * 60 { Some(mins) } else { None }
         }
         _ => None,
     }

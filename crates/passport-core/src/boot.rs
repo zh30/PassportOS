@@ -4,7 +4,7 @@
 //! what made the mark hitch on this ST7789.
 
 use crate::api::Draw;
-use crate::board::{OS_NAME, LCD_W};
+use crate::board::{LCD_W, OS_NAME};
 use crate::compositor::Rect;
 use crate::theme::Palette;
 
@@ -252,10 +252,7 @@ impl BootAnim {
                 let (_, oy) = p_origin(sy, sh);
                 paint_p(draw, ox, oy, pal.accent);
             } else {
-                draw.fill(
-                    stamp_rect(self.prev_stamp_y, self.prev_stamp_h),
-                    pal.bg,
-                );
+                draw.fill(stamp_rect(self.prev_stamp_y, self.prev_stamp_h), pal.bg);
                 paint_stamp(draw, sy, sh, pal);
             }
         }

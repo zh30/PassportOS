@@ -24,15 +24,17 @@ scrambles this ST7789 (花屏), so large fills stay on proven dark field colours
 | **Flap** | OK or UP **press** (not click-on-release) |
 | **Stack** | OK **press** drops the sliding slab |
 | **Brick** | UP / DOWN move the paddle (right side), OK **press** serves |
+| **Boo** | shout (or OK **press**) when a ghost hits the line; stay quiet for the yellow king. UP/DOWN pick a lane after score 4 |
 
-In Flap / Stack / Brick, UP and DOWN stay with the game: a release-click does
+In Flap / Stack / Brick / Boo / Tune, UP and DOWN stay with the app: a release-click does
 not hop to a neighbour tile, and holding a direction does not switch
 workspaces. Long OK is still home.
 
-**Launcher:** Pulse (ADC meter), Tap (NTAG213 facts), Flap, Stack, Brick, System.
+**Launcher:** three islands on the first screen — **Play** (Flap, Stack, Brick, Boo), **Tools** (Pulse, Tap, Tune), **System**. OK drills in; UP on the first app of a group, or Long OK in a group, zooms back out. Long OK on the island home still closes the launcher.
 
 **System:** brightness, appearance, **wifi** (scan, pick an AP, 3-key English IME
-for the password; open nets skip the IME), bluetooth, sleep, keys, about.
+for the password; open nets skip the IME), bluetooth, sleep, keys, about
+(UP/DOWN opens the factory used/free storage page).
 Wi-Fi credentials stay in RAM (the 16-byte KV slot is already full).
 
 Unplugged, the backlight turns off after **30 s** with no keys (PWM 0, not RTC
@@ -101,8 +103,8 @@ release firmware for ESP32-C3, and a GitHub Release with ELF, BIN, partition
 table, SHA-256 sums, and the full notes. Example:
 
 ```bash
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 Do not use `--erase-all` when flashing a Release build.

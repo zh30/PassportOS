@@ -7,13 +7,15 @@ use heapless::{String, Vec};
 
 use crate::app::{AppId, AppLifecycle, AppRegistry};
 use crate::board::{Key, KeyState, TYPICAL_RELEASED_MV};
-use crate::compositor::{layout_tiles, TileLayout, TILES_PER_WORKSPACE, WORKSPACE_COUNT};
+use crate::compositor::{TILES_PER_WORKSPACE, TileLayout, WORKSPACE_COUNT, layout_tiles};
 use crate::console::{Command, HELP};
 use crate::input::{ButtonDecoder, ButtonEvent, LONG_PRESS_MS};
-use crate::launcher::{Launcher, LauncherKind};
+use crate::launcher::{Launcher, LauncherGroup, LauncherKind, LauncherView};
 use crate::menu::{MenuAction, SystemMenu};
+use crate::mic::Mic;
 use crate::radio::ExclusiveManager;
 use crate::status::{RadioMode, StatusBar};
+use crate::storage::{ABOUT_PAGE_COUNT, ABOUT_PAGE_PRODUCT, factory_free};
 use crate::theme::Theme;
 use crate::wifi::{WifiAction, WifiNet, WifiUi};
 
@@ -127,6 +129,11 @@ pub struct Shell {
     standby: bool,
     /// After a wake press, swallow Click/LongPress/Release from the same hold.
     swallow_wake: bool,
+    about_page: u8,
+    factory_used: Option<u32>,
+    mic: Mic,
+    pitch: crate::pitch::PitchBuf,
+    mic_hz: u16,
 }
 
 impl Default for Shell {
@@ -155,6 +162,11 @@ impl Shell {
             idle_ms: 0,
             standby: false,
             swallow_wake: false,
+            about_page: ABOUT_PAGE_PRODUCT,
+            factory_used: None,
+            mic: Mic::new(),
+            pitch: crate::pitch::PitchBuf::new(),
+            mic_hz: 0,
         }
     }
 
@@ -196,6 +208,29 @@ impl Shell {
         self.overlay
     }
 
+    pub fn about_page(&self) -> u8 {
+        self.about_page
+    }
+
+    /// Bytes of the factory image. `None` until firmware measures it.
+    pub fn factory_used(&self) -> Option<u32> {
+        self.factory_used
+    }
+
+    pub fn factory_free(&self) -> Option<u32> {
+        self.factory_used.map(factory_free)
+    }
+
+    pub fn set_factory_used(&mut self, bytes: u32) {
+        self.factory_used = Some(bytes.min(crate::board::FLASH_APP_SIZE));
+    }
+
+    fn open_about(&mut self) {
+        self.about_page = ABOUT_PAGE_PRODUCT;
+        self.overlay = Overlay::About;
+        self.dirty = true;
+    }
+
     /// Backlight-off idle standby (PWM 0). Overlay and focused app stay put.
     pub fn is_standby(&self) -> bool {
         self.standby
@@ -219,6 +254,14 @@ impl Shell {
 
     pub fn launcher(&self) -> &Launcher {
         &self.launcher
+    }
+
+    /// Visible launcher rows. Firmware paints only this window.
+    pub fn launcher_window(&self) -> (usize, usize) {
+        self.launcher.window(
+            self.launcher_names().len(),
+            crate::launcher::launcher_visible(),
+        )
     }
 
     pub fn menu_selected(&self) -> usize {
@@ -280,6 +323,89 @@ impl Shell {
         self.registry.register(id, name)
     }
 
+    pub fn set_wants_mic(&mut self, id: AppId, on: bool) {
+        self.registry.set_wants_mic(id, on);
+    }
+
+    pub fn focused_app_id(&self) -> Option<AppId> {
+        self.workspaces[self.current_ws].focused_id()
+    }
+
+    /// Desk + focused app opted into mic. Firmware starts I2S only then.
+    pub fn mic_listen(&self) -> bool {
+        !self.standby
+            && self.overlay == Overlay::None
+            && self
+                .focused_app_id()
+                .is_some_and(|id| self.registry.wants_mic(id))
+    }
+
+    pub fn mic_level(&self) -> u8 {
+        self.mic.level()
+    }
+
+    pub fn mic_roar_at(&self) -> u8 {
+        self.mic.roar_at()
+    }
+
+    pub fn mic_loud_at(&self) -> u8 {
+        self.mic.loud_at()
+    }
+
+    pub fn mic_pcm_peak(&self) -> u16 {
+        self.mic.pcm_peak()
+    }
+
+    pub fn note_mic_peak(&mut self, peak: u16) {
+        self.mic.note_peak(peak);
+    }
+
+    /// Call when I2S capture starts so calibration and edges reset.
+    pub fn mic_begin(&mut self) {
+        self.mic.begin();
+        self.pitch.clear();
+        self.mic_hz = 0;
+    }
+
+    pub fn mic_hz(&self) -> u16 {
+        self.mic_hz
+    }
+
+    pub fn pitch_buf(&self) -> &crate::pitch::PitchBuf {
+        &self.pitch
+    }
+
+    /// Left-channel PCM from I2S. Tune searches near the selected string.
+    pub fn feed_pcm(&mut self, bytes: &[u8]) {
+        self.pitch.push_pcm16_le_left(bytes);
+        if self.pitch.len() >= crate::pitch::PITCH_N / 2 {
+            self.mic_hz = self.pitch.hz().unwrap_or(0);
+        }
+    }
+
+    /// Feed one 0..=255 RMS sample — the same entry firmware uses after PCM.
+    pub fn tick_mic(&mut self, level: u8) -> EventOutcome {
+        let ev = self.mic.feed(level);
+        if self.mic_listen() {
+            self.idle_ms = 0;
+        }
+        let Some(ev) = ev else {
+            return EventOutcome::empty();
+        };
+        if self.overlay != Overlay::None {
+            return EventOutcome::empty();
+        }
+        let Some(id) = self.focused_app_id() else {
+            return EventOutcome::empty();
+        };
+        if !self.registry.wants_mic(id) {
+            return EventOutcome::empty();
+        }
+        let mut notes = Vec::new();
+        let _ = notes.push(crate::app::AppLifecycle::Mic(id, ev));
+        EventOutcome::from_lifecycle(notes)
+    }
+
     /// Feed one millivolt sample — the same entry point used by ADC and console inject.
     pub fn tick_mv(&mut self, mv: u16, dt_ms: u32) -> EventOutcome {
         let mut out = EventOutcome::empty();
@@ -302,7 +428,7 @@ impl Shell {
             self.swallow_wake = false;
         }
         let held = !matches!(self.decoder.current(), KeyState::Released);
-        if self.status.charging || held || self.swallow_wake {
+        if self.status.charging || held || self.swallow_wake || self.mic_listen() {
             self.idle_ms = 0;
         } else {
             self.idle_ms = self.idle_ms.saturating_add(dt_ms);
@@ -389,8 +515,7 @@ impl Shell {
                 let _ = out.reply.push_str("keys");
             }
             Command::About => {
-                self.overlay = Overlay::About;
-                self.dirty = true;
+                self.open_about();
                 let _ = out.reply.push_str("about");
             }
             Command::Theme(t) => {
@@ -437,13 +562,33 @@ impl Shell {
                     self.open_launcher();
                 }
                 self.launcher.clear_filter();
-                let items = self.launcher.items(self.registry.slots());
-                if let Some(idx) = items.iter().position(|i| i.name.eq_ignore_ascii_case(name.as_str()))
-                {
-                    self.launcher.selected = idx;
-                    append(&mut out.lifecycle, self.activate_selected());
+                let key = name.as_str();
+                if key.eq_ignore_ascii_case("play") {
+                    self.launcher.enter_group(LauncherGroup::Play);
+                } else if key.eq_ignore_ascii_case("tools") {
+                    self.launcher.enter_group(LauncherGroup::Tools);
                 } else {
-                    let _ = write!(out.reply, "no app {name}");
+                    let items = self.launcher.catalog(self.registry.slots());
+                    if let Some(item) = items
+                        .iter()
+                        .find(|i| i.name.eq_ignore_ascii_case(key))
+                        .copied()
+                    {
+                        match item.kind {
+                            LauncherKind::System => {
+                                self.launcher.close();
+                                self.open_menu();
+                            }
+                            LauncherKind::App(id) => {
+                                self.launcher.close();
+                                self.overlay = Overlay::None;
+                                append(&mut out.lifecycle, self.start_on_current(id));
+                            }
+                            LauncherKind::Island(_) => {}
+                        }
+                    } else {
+                        let _ = write!(out.reply, "no app {name}");
+                    }
                 }
                 if out.reply.is_empty() {
                     self.refresh_status();
@@ -519,6 +664,17 @@ impl Shell {
                 out.side = SideEffect::AudioRec;
                 let _ = out.reply.push_str("audio rec");
             }
+            Command::Mic => {
+                let _ = write!(
+                    out.reply,
+                    "mic {} roar={} peak={} pcm={} hz={}",
+                    self.mic.level(),
+                    self.mic.roar_at(),
+                    self.mic.loud_at(),
+                    self.mic.pcm_peak(),
+                    self.mic_hz
+                );
+            }
         }
         self.dirty = true;
         self.refresh_status();
@@ -544,7 +700,8 @@ impl Shell {
         match self.overlay {
             Overlay::Launcher => self.handle_launcher(ev),
             Overlay::System => self.handle_menu(ev),
-            Overlay::Keys | Overlay::About => self.handle_page(ev),
+            Overlay::Keys => self.handle_page(ev),
+            Overlay::About => self.handle_about(ev),
             Overlay::Wifi => self.handle_wifi(ev),
             Overlay::None => self.handle_workspace(ev),
         }
@@ -557,6 +714,8 @@ impl Shell {
                 if id == crate::flap::FLAP_APP_ID
                     || id == crate::stack::STACK_APP_ID
                     || id == crate::brick::BRICK_APP_ID
+                    || id == crate::boo::BOO_APP_ID
+                    || id == crate::tune::TUNE_APP_ID
         )
     }
 
@@ -576,8 +735,12 @@ impl Shell {
                 }
                 EventOutcome::from_lifecycle(notes)
             }
-            ButtonEvent::LongPress(Key::Up) => EventOutcome::from_lifecycle(self.switch_workspace(0)),
-            ButtonEvent::LongPress(Key::Down) => EventOutcome::from_lifecycle(self.switch_workspace(1)),
+            ButtonEvent::LongPress(Key::Up) => {
+                EventOutcome::from_lifecycle(self.switch_workspace(0))
+            }
+            ButtonEvent::LongPress(Key::Down) => {
+                EventOutcome::from_lifecycle(self.switch_workspace(1))
+            }
             ButtonEvent::Click(Key::Up) => EventOutcome::from_lifecycle(self.focus_delta(-1)),
             ButtonEvent::Click(Key::Down) => EventOutcome::from_lifecycle(self.focus_delta(1)),
             ButtonEvent::Click(Key::Ok) => {
@@ -600,11 +763,20 @@ impl Shell {
     }
 
     fn handle_launcher(&mut self, ev: ButtonEvent) -> EventOutcome {
+        let in_group = matches!(self.launcher.view(), LauncherView::Group(_));
         let len = self.launcher.items(self.registry.slots()).len();
         match ev {
+            ButtonEvent::LongPress(Key::Ok) if in_group => {
+                self.launcher.leave_group();
+                EventOutcome::empty()
+            }
             ButtonEvent::LongPress(Key::Ok) => {
                 self.launcher.close();
                 self.overlay = Overlay::None;
+                EventOutcome::empty()
+            }
+            ButtonEvent::Click(Key::Up) if in_group && self.launcher.selected == 0 => {
+                self.launcher.leave_group();
                 EventOutcome::empty()
             }
             ButtonEvent::Click(Key::Up) => {
@@ -679,7 +851,7 @@ impl Shell {
                 SideEffect::None
             }
             MenuAction::About => {
-                self.overlay = Overlay::About;
+                self.open_about();
                 SideEffect::None
             }
             MenuAction::ThemeToggle => {
@@ -719,7 +891,7 @@ impl Shell {
         }
     }
 
-    /// Keys / About pages live under the system menu. Click returns there.
+    /// Keys page lives under the system menu. Click returns there.
     fn handle_page(&mut self, ev: ButtonEvent) -> EventOutcome {
         match ev {
             ButtonEvent::LongPress(Key::Ok) => {
@@ -727,6 +899,33 @@ impl Shell {
                 EventOutcome::empty()
             }
             ButtonEvent::Click(_) => {
+                self.overlay = Overlay::System;
+                if !self.menu.open {
+                    self.menu.open();
+                }
+                EventOutcome::empty()
+            }
+            _ => EventOutcome::empty(),
+        }
+    }
+
+    /// About: UP/DOWN flip product ↔ storage. OK returns to the system menu.
+    fn handle_about(&mut self, ev: ButtonEvent) -> EventOutcome {
+        match ev {
+            ButtonEvent::LongPress(Key::Ok) => {
+                self.open_launcher();
+                EventOutcome::empty()
+            }
+            ButtonEvent::Click(Key::Up) => {
+                self.about_page = (self.about_page + ABOUT_PAGE_COUNT - 1) % ABOUT_PAGE_COUNT;
+                EventOutcome::empty()
+            }
+            ButtonEvent::Click(Key::Down) => {
+                self.about_page = (self.about_page + 1) % ABOUT_PAGE_COUNT;
+                EventOutcome::empty()
+            }
+            ButtonEvent::Click(Key::Ok) => {
+                self.about_page = ABOUT_PAGE_PRODUCT;
                 self.overlay = Overlay::System;
                 if !self.menu.open {
                     self.menu.open();
@@ -785,13 +984,18 @@ impl Shell {
             Some(i) => i,
             None => return Vec::new(),
         };
-        self.launcher.close();
         match item.kind {
+            LauncherKind::Island(g) => {
+                self.launcher.enter_group(g);
+                Vec::new()
+            }
             LauncherKind::System => {
+                self.launcher.close();
                 self.open_menu();
                 Vec::new()
             }
             LauncherKind::App(id) => {
+                self.launcher.close();
                 self.overlay = Overlay::None;
                 self.start_on_current(id)
             }
@@ -914,8 +1118,13 @@ impl Shell {
             }
             Overlay::About => {
                 self.status.overlay.clear();
-                let _ = self.status.overlay.push_str("about");
-                self.status.set_focused("about");
+                if self.about_page == crate::storage::ABOUT_PAGE_STORAGE {
+                    let _ = self.status.overlay.push_str("storage");
+                    self.status.set_focused("storage");
+                } else {
+                    let _ = self.status.overlay.push_str("about");
+                    self.status.set_focused("about");
+                }
             }
             Overlay::Wifi => {
                 self.status.overlay.clear();
@@ -938,7 +1147,10 @@ impl Shell {
     }
 }
 
-fn append<const N: usize, const M: usize>(dst: &mut Vec<AppLifecycle, N>, src: Vec<AppLifecycle, M>) {
+fn append<const N: usize, const M: usize>(
+    dst: &mut Vec<AppLifecycle, N>,
+    src: Vec<AppLifecycle, M>,
+) {
     for n in src {
         let _ = dst.push(n);
     }

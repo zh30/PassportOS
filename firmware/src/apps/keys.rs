@@ -1,8 +1,8 @@
 //! Built-in Shortcuts. Drawing still lives in `ui.rs` until Stage 2.5.
 
+use passport_core::AppId;
 use passport_core::api::{App, Cx};
 use passport_core::compositor::Rect;
-use passport_core::AppId;
 
 pub struct KeysApp;
 

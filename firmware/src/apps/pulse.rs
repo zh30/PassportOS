@@ -2,14 +2,14 @@
 
 use core::fmt::Write as _;
 
-use passport_core::api::{
-    apply_notes, App, Battery, ClippedDraw, Cx, MemoryStore, NullAudio, NullPower, NullRadio,
-};
-use passport_core::board::{adc_bar_width, decode_millivolts, KeyState, TYPICAL_RELEASED_MV};
-use passport_core::compositor::Rect;
 use passport_core::AppId;
+use passport_core::api::{
+    App, Battery, ClippedDraw, Cx, MemoryStore, NullAudio, NullPower, NullRadio, apply_notes,
+};
+use passport_core::board::{KeyState, TYPICAL_RELEASED_MV, adc_bar_width, decode_millivolts};
+use passport_core::compositor::Rect;
 
-use crate::draw::{content_rect, LcdDraw};
+use crate::draw::{LcdDraw, content_rect};
 use crate::st7789::{St7789, WIDTH};
 use passport_core::theme::Palette;
 
@@ -105,7 +105,8 @@ impl App for PulseApp {
         let y = vp.y + 8;
         cx.draw.text(x, y, "Pulse", p.secondary, p.bg);
         self.draw_meter(cx, vp, p);
-        cx.draw.text(x, y + 92, "0            3.3V", p.secondary, p.bg);
+        cx.draw
+            .text(x, y + 92, "0            3.3V", p.secondary, p.bg);
     }
 }
 
@@ -133,6 +134,7 @@ where
         Battery::unknown(),
         100,
         app.last_mv(),
+        0,
     );
     let x = vp.x + 16;
     let y = vp.y + 8;
@@ -165,6 +167,7 @@ where
         Battery::unknown(),
         100,
         app.last_mv(),
+        0,
     );
     app.draw_meter(&mut cx, vp, p);
 }
@@ -186,6 +189,7 @@ pub fn dispatch(app: &mut PulseApp, notes: &[passport_core::AppLifecycle], adc_m
         Battery::unknown(),
         100,
         adc_mv,
+        0,
     );
     apply_notes(app, notes, &mut cx);
     app.on_tick(&mut cx, 20);

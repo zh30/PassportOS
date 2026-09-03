@@ -2,18 +2,22 @@
 //! only need the two affected cards. Live animation is a separate generation
 //! so a game tick never wipes the playfield.
 
-use crate::flap::FLAP_APP_ID;
-use crate::stack::STACK_APP_ID;
+use crate::boo::BOO_APP_ID;
 use crate::brick::BRICK_APP_ID;
+use crate::flap::FLAP_APP_ID;
 use crate::shell::{Overlay, Shell};
+use crate::stack::STACK_APP_ID;
 use crate::status::RadioMode;
 use crate::theme::Theme;
+use crate::tune::TUNE_APP_ID;
 use crate::wifi::WifiPhase;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrameSig {
     pub overlay: Overlay,
     pub launcher_sel: usize,
+    pub launcher_win: u8,
+    pub launcher_view: u8,
     pub menu_sel: usize,
     pub workspace: u8,
     pub soc: Option<u8>,
@@ -32,6 +36,7 @@ pub struct FrameSig {
     pub ime_idx: u8,
     pub ime_len: u8,
     pub ime_shift: bool,
+    pub about_page: u8,
 }
 
 impl FrameSig {
@@ -39,6 +44,8 @@ impl FrameSig {
         Self {
             overlay: shell.overlay(),
             launcher_sel: shell.launcher().selected,
+            launcher_win: shell.launcher_window().0.min(255) as u8,
+            launcher_view: shell.launcher().view_id(),
             menu_sel: shell.menu_selected(),
             workspace: shell.status.workspace,
             soc: shell.status.battery_soc,
@@ -54,6 +61,7 @@ impl FrameSig {
             ime_idx: shell.wifi().ime().cursor() as u8,
             ime_len: shell.wifi().ime().len() as u8,
             ime_shift: shell.wifi().ime().shift(),
+            about_page: shell.about_page(),
         }
     }
 }
@@ -164,7 +172,11 @@ impl PaintPlan {
         let Some(p) = prev else {
             return Self::full(now);
         };
-        if p.overlay != now.overlay || p.focused != now.focused || p.theme != now.theme {
+        if p.overlay != now.overlay
+            || p.focused != now.focused
+            || p.theme != now.theme
+            || p.about_page != now.about_page
+        {
             return Self::full(now);
         }
         let status = p.soc != now.soc
@@ -189,6 +201,27 @@ impl PaintPlan {
             };
         }
         match now.overlay {
+            Overlay::Launcher if p.launcher_view != now.launcher_view => Self {
+                status,
+                wipe_content: true,
+                desktop: true,
+                ..Self::default()
+            },
+            Overlay::Launcher if p.launcher_win != now.launcher_win => Self {
+                status,
+                desktop: true,
+                ..Self::default()
+            },
+            // Islands are 88px cards. The group list is 44px rows. A focus
+            // move on home must not emit `launcher_cards` — firmware would
+            // paint the small rows over the islands.
+            Overlay::Launcher if p.launcher_sel != now.launcher_sel && now.launcher_view == 0 => {
+                Self {
+                    status,
+                    desktop: true,
+                    ..Self::default()
+                }
+            }
             Overlay::Launcher if p.launcher_sel != now.launcher_sel => Self {
                 status,
                 launcher_cards: Some((p.launcher_sel, now.launcher_sel)),
@@ -244,5 +277,9 @@ impl PaintPlan {
 }
 
 fn is_live_game(id: u8) -> bool {
-    id == FLAP_APP_ID.0 || id == STACK_APP_ID.0 || id == BRICK_APP_ID.0
+    id == FLAP_APP_ID.0
+        || id == STACK_APP_ID.0
+        || id == BRICK_APP_ID.0
+        || id == BOO_APP_ID.0
+        || id == TUNE_APP_ID.0
 }

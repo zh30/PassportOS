@@ -1,13 +1,13 @@
 //! Tap: NTAG213 is on the card, not on the MCU bus.
 
+use passport_core::AppId;
 use passport_core::api::{
-    apply_notes, App, Battery, ClippedDraw, Cx, MemoryStore, NullAudio, NullPower, NullRadio,
+    App, Battery, ClippedDraw, Cx, MemoryStore, NullAudio, NullPower, NullRadio, apply_notes,
 };
 use passport_core::compositor::Rect;
-use passport_core::nfc::{encode_uri_tlv, DEFAULT_URI, NTAG213};
-use passport_core::AppId;
+use passport_core::nfc::{DEFAULT_URI, NTAG213, encode_uri_tlv};
 
-use crate::draw::{content_rect, LcdDraw};
+use crate::draw::{LcdDraw, content_rect};
 use crate::st7789::St7789;
 use passport_core::theme::Palette;
 
@@ -44,7 +44,8 @@ impl NfcApp {
         y = y.saturating_add(24);
         cx.draw.text(x, y, "phone reads NDEF", p.label, p.bg);
         y = y.saturating_add(16);
-        cx.draw.text(x, y, "firmware cannot write", p.secondary, p.bg);
+        cx.draw
+            .text(x, y, "firmware cannot write", p.secondary, p.bg);
         y = y.saturating_add(24);
         cx.draw.fill(
             Rect {
@@ -114,6 +115,7 @@ where
         Battery::unknown(),
         100,
         0,
+        0,
     );
     app.paint_body(&mut cx, vp, p);
 }
@@ -135,6 +137,7 @@ pub fn dispatch(app: &mut NfcApp, notes: &[passport_core::AppLifecycle], adc_mv:
         Battery::unknown(),
         100,
         adc_mv,
+        0,
     );
     apply_notes(app, notes, &mut cx);
 }

@@ -1,32 +1,9 @@
 //! ES8311 (0x18) and CW2017 (0x63) on the shared I2C0 bus. Never create a second bus.
 
 use embedded_hal::i2c::I2c;
+use passport_core::ES8311_INIT;
 use passport_core::board::{I2C_CW2017_ADDR, I2C_ES8311_ADDR};
-
-const ES8311_INIT: &[(u8, u8)] = &[
-    (0x00, 0x1F),
-    (0x00, 0x00),
-    (0x01, 0x30),
-    (0x02, 0x00),
-    (0x03, 0x10),
-    (0x16, 0x24),
-    (0x04, 0x10),
-    (0x05, 0x00),
-    (0x06, 0x03),
-    (0x07, 0x01),
-    (0x08, 0xFF),
-    (0x09, 0x0C),
-    (0x0A, 0x0C),
-    (0x0D, 0x01),
-    (0x0E, 0x02),
-    (0x12, 0x00),
-    (0x13, 0x10),
-    (0x14, 0x1A),
-    (0x17, 0xBF),
-    (0x32, 0xBF),
-    (0x37, 0x08),
-    (0x44, 0x08), // no DAC ref — mic path would otherwise read silence
-];
+use passport_core::es8311;
 
 pub fn probe<I: I2c>(i2c: &mut I, addr: u8) -> bool {
     let mut b = [0u8];
@@ -38,6 +15,21 @@ pub fn es8311_init<I: I2c>(i2c: &mut I) -> Result<(), I::Error> {
         i2c.write(I2C_ES8311_ADDR, &[reg, val])?;
     }
     Ok(())
+}
+
+/// ADC clocks + analog mic after I2S TX is providing MCLK/BCLK.
+pub fn es8311_start<I: I2c>(i2c: &mut I) -> Result<(), I::Error> {
+    for &(reg, val) in es8311::START {
+        i2c.write(I2C_ES8311_ADDR, &[reg, val])?;
+    }
+    Ok(())
+}
+
+pub fn es8311_read<I: I2c>(i2c: &mut I, reg: u8) -> Option<u8> {
+    let mut b = [0u8];
+    i2c.write_read(I2C_ES8311_ADDR, &[reg], &mut b)
+        .ok()
+        .map(|_| b[0])
 }
 
 pub fn cw2017_wake<I: I2c>(i2c: &mut I) -> Result<(), I::Error> {

@@ -16,13 +16,18 @@ pub struct Battery {
 
 impl Battery {
     pub const fn unknown() -> Self {
-        Self { soc: None, mv: None }
+        Self {
+            soc: None,
+            mv: None,
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ApiError {
-    Busy { owner: Option<Resource> },
+    Busy {
+        owner: Option<Resource>,
+    },
     Full,
     BadArg,
     /// NTAG213 is not on I2C/SPI/GPIO — MCU cannot read or write the tag.
@@ -45,6 +50,7 @@ pub trait App {
     fn on_focus(&mut self, _cx: &mut Cx<'_>) {}
     fn on_blur(&mut self, _cx: &mut Cx<'_>) {}
     fn on_key(&mut self, _cx: &mut Cx<'_>, _ev: ButtonEvent) {}
+    fn on_mic(&mut self, _cx: &mut Cx<'_>, _ev: crate::mic::MicEvent) {}
     fn on_tick(&mut self, _cx: &mut Cx<'_>, _dt_ms: u32) {}
     fn draw(&self, cx: &mut Cx<'_>, viewport: Rect);
 }
@@ -60,6 +66,8 @@ pub struct Cx<'a> {
     pub battery: Battery,
     pub brightness: u8,
     adc_mv: u16,
+    mic_level: u8,
+    mic_hz: u16,
 }
 
 impl<'a> Cx<'a> {
@@ -74,6 +82,7 @@ impl<'a> Cx<'a> {
         battery: Battery,
         brightness: u8,
         adc_mv: u16,
+        mic_level: u8,
     ) -> Self {
         Self {
             draw,
@@ -85,6 +94,8 @@ impl<'a> Cx<'a> {
             battery,
             brightness,
             adc_mv,
+            mic_level,
+            mic_hz: 0,
         }
     }
 
@@ -95,6 +106,25 @@ impl<'a> Cx<'a> {
 
     pub fn set_adc_mv(&mut self, mv: u16) {
         self.adc_mv = mv;
+    }
+
+    /// Last system mic level (0..=255 RMS). Keys stay on [`App::on_key`]; shouts
+    /// arrive via [`App::on_mic`].
+    pub fn mic_level(&self) -> u8 {
+        self.mic_level
+    }
+
+    pub fn set_mic_level(&mut self, level: u8) {
+        self.mic_level = level;
+    }
+
+    /// Last detected pitch in Hz, or 0 if the buffer is silent.
+    pub fn mic_hz(&self) -> u16 {
+        self.mic_hz
+    }
+
+    pub fn set_mic_hz(&mut self, hz: u16) {
+        self.mic_hz = hz;
     }
 
     /// Passive NTAG213 facts. MCU read/write is [`ApiError::NoBus`].
@@ -266,10 +296,7 @@ impl Radio for ExclusiveRadio<'_> {
     }
 
     fn off(&mut self) {
-        if matches!(
-            self.exclusive.owner(),
-            Some(Resource::Wifi | Resource::Ble)
-        ) {
+        if matches!(self.exclusive.owner(), Some(Resource::Wifi | Resource::Ble)) {
             let owner = self.exclusive.owner().unwrap();
             self.exclusive.release(owner);
         }
@@ -443,6 +470,7 @@ pub fn apply_notes(app: &mut dyn App, notes: &[crate::app::AppLifecycle], cx: &m
             AppLifecycle::Focus(id) if id == app.id() => app.on_focus(cx),
             AppLifecycle::Blur(id) if id == app.id() => app.on_blur(cx),
             AppLifecycle::Input(id, ev) if id == app.id() => app.on_key(cx, ev),
+            AppLifecycle::Mic(id, ev) if id == app.id() => app.on_mic(cx, ev),
             _ => {}
         }
     }

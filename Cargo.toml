@@ -6,7 +6,7 @@ default-members = ["crates/passport-core"]
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "0.1.2"
+version = "0.2.0"
 repository = "https://github.com/FoloToy/ai-passport"
 
 [workspace.dependencies]

@@ -1,14 +1,14 @@
 //! Host tests for the unified App / Cx API. No HAL types.
 
 use passport_core::api::{
-    apply_notes, ApiError, App, Audio, Battery, ClippedDraw, Cx, Draw, ExclusiveAudio,
-    ExclusiveRadio, MemoryStore, NullAudio, NullDraw, NullPower, NullRadio, Power, Radio, Store,
+    ApiError, App, Audio, Battery, ClippedDraw, Cx, Draw, ExclusiveAudio, ExclusiveRadio,
+    MemoryStore, NullAudio, NullDraw, NullPower, NullRadio, Power, Radio, Store, apply_notes,
 };
 use passport_core::app::{AppId, AppLifecycle};
-use passport_core::compositor::{layout_tiles, Rect, STATUS_BAR_H};
+use passport_core::board::Key;
+use passport_core::compositor::{Rect, STATUS_BAR_H, layout_tiles};
 use passport_core::input::ButtonEvent;
 use passport_core::radio::{ExclusiveManager, Resource};
-use passport_core::board::Key;
 
 const HELLO: AppId = AppId(7);
 
@@ -131,6 +131,7 @@ fn with_cx<R>(
         Battery::unknown(),
         100,
         adc_mv,
+        0,
     );
     f(&mut cx)
 }
@@ -176,17 +177,23 @@ fn hello_app_lifecycle_and_clipped_draw() {
     assert_eq!(app.ticks, 20);
     assert_eq!(app.last_adc, 3300);
     assert!(
-        rec.fills.iter().any(|(r, c)| r.y >= STATUS_BAR_H && *c == 0x10A2),
+        rec.fills
+            .iter()
+            .any(|(r, c)| r.y >= STATUS_BAR_H && *c == 0x10A2),
         "app fill must land in the tile, got {:?}",
         rec.fills
     );
     assert!(
-        rec.fills.iter().all(|(r, _)| r.y >= STATUS_BAR_H || r.intersection(tile).is_some() && r.y >= tile.y),
+        rec.fills
+            .iter()
+            .all(|(r, _)| r.y >= STATUS_BAR_H || r.intersection(tile).is_some() && r.y >= tile.y),
         "status bar must stay unpainted by the app: {:?}",
         rec.fills
     );
     assert!(
-        !rec.fills.iter().any(|(r, c)| r.y < STATUS_BAR_H && *c == 0xF800 && r.h == STATUS_BAR_H),
+        !rec.fills
+            .iter()
+            .any(|(r, c)| r.y < STATUS_BAR_H && *c == 0xF800 && r.h == STATUS_BAR_H),
         "clipped status-bar fill leaked: {:?}",
         rec.fills
     );

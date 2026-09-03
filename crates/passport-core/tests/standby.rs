@@ -1,14 +1,12 @@
 //! Idle backlight-off standby. Drives shipped `Shell` + millivolt decoder, not a copy.
 
 use passport_core::app::{AppId, AppLifecycle};
-use passport_core::board::{
-    decode_millivolts, Key, KeyState, INPUT_TICK_MS, TYPICAL_RELEASED_MV,
-};
+use passport_core::board::{INPUT_TICK_MS, Key, KeyState, TYPICAL_RELEASED_MV, decode_millivolts};
 use passport_core::charging_from_samples;
 use passport_core::console::parse_line;
 use passport_core::flap::FLAP_APP_ID;
 use passport_core::input::{ButtonEvent, DEBOUNCE_MS, RELEASE_DEBOUNCE_MS};
-use passport_core::shell::{Overlay, Shell, SideEffect, IDLE_STANDBY_MS};
+use passport_core::shell::{IDLE_STANDBY_MS, Overlay, Shell, SideEffect};
 
 const PULSE: AppId = AppId(1);
 const METER: AppId = AppId(2);
@@ -43,7 +41,9 @@ fn press_until_down(sh: &mut Shell, key: Key) {
     assert_eq!(sh.decoder().current(), KeyState::Down(key));
 }
 
-fn firmware_release_edge(sh: &mut Shell) -> (passport_core::EventOutcome, passport_core::EventOutcome) {
+fn firmware_release_edge(
+    sh: &mut Shell,
+) -> (passport_core::EventOutcome, passport_core::EventOutcome) {
     // Post-SPI sample is often 1 ms — shorter than RELEASE_DEBOUNCE_MS.
     let early = sh.tick_mv(TYPICAL_RELEASED_MV, 1);
     let settled = sh.tick_mv(TYPICAL_RELEASED_MV, RELEASE_DEBOUNCE_MS);
@@ -58,11 +58,18 @@ fn enter_standby(sh: &mut Shell) -> passport_core::EventOutcome {
     let focused = sh.focused_app_name();
     let ws = sh.current_workspace();
     let out = idle_released(sh, IDLE_STANDBY_MS);
-    assert_eq!(out.side, SideEffect::SetBrightness(0), "standby is PWM 0, not RTC sleep");
+    assert_eq!(
+        out.side,
+        SideEffect::SetBrightness(0),
+        "standby is PWM 0, not RTC sleep"
+    );
     assert_ne!(out.side, SideEffect::SleepLight);
     assert_ne!(out.side, SideEffect::SleepDeep);
     assert!(sh.is_standby());
-    assert_eq!(sh.status.brightness, bl, "stored brightness stays the restore target");
+    assert_eq!(
+        sh.status.brightness, bl,
+        "stored brightness stays the restore target"
+    );
     assert_eq!(sh.overlay(), overlay);
     assert_eq!(sh.focused_app_name(), focused);
     assert_eq!(sh.current_workspace(), ws);
@@ -140,9 +147,14 @@ fn each_key_wakes_without_stealing_ui_then_later_click_still_works() {
             out.side
         );
         assert_ne!(out.side, SideEffect::SetBrightness(0));
-        assert_eq!(sh.overlay(), Overlay::Launcher, "{key:?} must not close launcher");
         assert_eq!(
-            sh.launcher().selected, sel,
+            sh.overlay(),
+            Overlay::Launcher,
+            "{key:?} must not close launcher"
+        );
+        assert_eq!(
+            sh.launcher().selected,
+            sel,
             "{key:?} wake must not move the launcher cursor"
         );
         assert!(
@@ -174,7 +186,11 @@ fn wake_up_does_not_hop_utility_tiles() {
 
     let out = sh.synth_click(Key::Up);
     assert!(!sh.is_standby());
-    assert_eq!(sh.focused_app_name(), Some("meter"), "wake UP must not focus_delta");
+    assert_eq!(
+        sh.focused_app_name(),
+        Some("meter"),
+        "wake UP must not focus_delta"
+    );
     assert!(
         !out.lifecycle.iter().any(|n| matches!(
             n,
@@ -187,7 +203,9 @@ fn wake_up_does_not_hop_utility_tiles() {
     let out = sh.synth_click(Key::Up);
     assert_eq!(sh.focused_app_name(), Some("pulse"));
     assert!(
-        out.lifecycle.iter().any(|n| matches!(n, AppLifecycle::Focus(id) if *id == PULSE)),
+        out.lifecycle
+            .iter()
+            .any(|n| matches!(n, AppLifecycle::Focus(id) if *id == PULSE)),
         "post-wake UP click still hops tiles, got {:?}",
         out.lifecycle
     );
@@ -254,7 +272,8 @@ fn wake_release_at_firmware_cadence_does_not_steal_launcher() {
         );
         assert_eq!(sh.overlay(), Overlay::Launcher, "{key:?}");
         assert_eq!(
-            sh.launcher().selected, sel,
+            sh.launcher().selected,
+            sel,
             "{key:?} Click after 1 ms Released must still be swallowed"
         );
 

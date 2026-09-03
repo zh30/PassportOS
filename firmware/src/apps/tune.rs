@@ -1,4 +1,4 @@
-//! Stack. Logic and dirty-rect paint live in `passport_core::stack`.
+//! Guitar / ukulele / violin tuner. Logic lives in `passport_core::tune`.
 
 use passport_core::AppId;
 use passport_core::api::{
@@ -7,30 +7,23 @@ use passport_core::api::{
 use passport_core::compositor::Rect;
 use passport_core::flap::Redraw;
 use passport_core::input::ButtonEvent;
-use passport_core::stack::{
-    STACK_APP_ID, StackState, StackWorld, is_stack_input, read_best, write_best,
-};
+use passport_core::pitch::{PITCH_N, PitchBuf};
 use passport_core::theme::Palette;
+use passport_core::tune::{TUNE_APP_ID, TuneWorld, is_tune_instrument_key, is_tune_string_key};
 
 use crate::draw::{LcdDraw, content_rect};
 use crate::st7789::St7789;
 
-pub const STACK_ID: AppId = STACK_APP_ID;
+pub const TUNE_ID: AppId = TUNE_APP_ID;
 
-fn save_best_if_higher(app: &StackApp, cx: &mut Cx<'_>) {
-    if app.world.best > read_best(cx.store) {
-        write_best(cx.store, app.world.best);
-    }
+pub struct TuneApp {
+    world: TuneWorld,
 }
 
-pub struct StackApp {
-    world: StackWorld,
-}
-
-impl StackApp {
-    pub fn new() -> Self {
+impl TuneApp {
+    pub const fn new() -> Self {
         Self {
-            world: StackWorld::new(0x51AC_B10C),
+            world: TuneWorld::new(),
         }
     }
 
@@ -43,45 +36,37 @@ impl StackApp {
     }
 }
 
-impl App for StackApp {
+impl App for TuneApp {
     fn id(&self) -> AppId {
-        STACK_ID
+        TUNE_ID
     }
     fn name(&self) -> &'static str {
-        "stack"
+        "tune"
     }
     fn title(&self) -> &'static str {
-        "Stack"
+        "Tune"
     }
     fn blurb(&self) -> &'static str {
-        "drop slabs"
+        "guitar uke violin"
     }
 
-    fn on_start(&mut self, cx: &mut Cx<'_>) {
-        self.world.reset();
-        self.world.seed_best(read_best(cx.store));
-        esp_println::println!("[app] stack start best={}", self.world.best);
+    fn on_start(&mut self, _cx: &mut Cx<'_>) {
+        self.world = TuneWorld::new();
+        esp_println::println!("[app] tune start");
     }
 
     fn on_key(&mut self, _cx: &mut Cx<'_>, ev: ButtonEvent) {
-        if is_stack_input(ev) {
-            self.world.drop();
+        if is_tune_instrument_key(ev) {
+            self.world.cycle_instrument();
+        }
+        if is_tune_string_key(ev) {
+            self.world.nudge_string(ev);
         }
     }
 
-    fn on_stop(&mut self, cx: &mut Cx<'_>) {
-        save_best_if_higher(self, cx);
-    }
-
-    fn on_blur(&mut self, cx: &mut Cx<'_>) {
-        save_best_if_higher(self, cx);
-    }
-
     fn on_tick(&mut self, cx: &mut Cx<'_>, _dt_ms: u32) {
-        let lived = self.world.state != StackState::Dead;
-        self.world.tick();
-        if lived && self.world.state == StackState::Dead {
-            save_best_if_higher(self, cx);
+        if cx.mic_hz() > 0 {
+            self.world.feed_hz(cx.mic_hz());
         }
     }
 
@@ -91,7 +76,7 @@ impl App for StackApp {
     }
 }
 
-pub fn paint<SPI, DC, CS, E>(lcd: &mut St7789<SPI, DC, CS>, app: &StackApp, p: Palette, live: bool)
+pub fn paint<SPI, DC, CS, E>(lcd: &mut St7789<SPI, DC, CS>, app: &TuneApp, p: Palette, live: bool)
 where
     SPI: embedded_hal::spi::SpiBus<u8, Error = E>,
     DC: embedded_hal::digital::OutputPin,
@@ -105,11 +90,14 @@ where
 }
 
 pub fn dispatch(
-    app: &mut StackApp,
+    app: &mut TuneApp,
     notes: &[passport_core::AppLifecycle],
     adc_mv: u16,
     tick: bool,
     store: &mut dyn Store,
+    mic_level: u8,
+    mic_hz: u16,
+    pitch: Option<&PitchBuf>,
 ) {
     let vp = content_rect();
     let mut draw = passport_core::api::NullDraw::new(vp);
@@ -126,10 +114,19 @@ pub fn dispatch(
         Battery::unknown(),
         100,
         adc_mv,
-        0,
+        mic_level,
     );
+    cx.set_mic_hz(mic_hz);
     apply_notes(app, notes, &mut cx);
     if tick {
-        app.on_tick(&mut cx, 20);
+        if let Some(buf) = pitch {
+            if buf.len() >= 64 {
+                let mut tmp = [0i16; PITCH_N];
+                let n = buf.copy_linear(&mut tmp);
+                app.world.listen(&tmp[..n]);
+            }
+        } else {
+            app.on_tick(&mut cx, 20);
+        }
     }
 }

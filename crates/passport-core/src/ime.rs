@@ -53,15 +53,7 @@ pub const IME_ROW1: &[ImeKey] = &[
     c('k'),
     c('l'),
 ];
-pub const IME_ROW2: &[ImeKey] = &[
-    c('z'),
-    c('x'),
-    c('c'),
-    c('v'),
-    c('b'),
-    c('n'),
-    c('m'),
-];
+pub const IME_ROW2: &[ImeKey] = &[c('z'), c('x'), c('c'), c('v'), c('b'), c('n'), c('m')];
 pub const IME_ROW3: &[ImeKey] = &[
     c('1'),
     c('2'),
@@ -92,9 +84,7 @@ pub const IME_ROW5: &[ImeKey] = &[
     ImeKey::Done,
 ];
 
-pub const IME_ROWS: &[&[ImeKey]] = &[
-    IME_ROW0, IME_ROW1, IME_ROW2, IME_ROW3, IME_ROW4, IME_ROW5,
-];
+pub const IME_ROWS: &[&[ImeKey]] = &[IME_ROW0, IME_ROW1, IME_ROW2, IME_ROW3, IME_ROW4, IME_ROW5];
 
 pub const IME_KEY_COUNT: usize = IME_ROW0.len()
     + IME_ROW1.len()

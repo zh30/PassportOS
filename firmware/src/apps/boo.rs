@@ -1,36 +1,37 @@
-//! Stack. Logic and dirty-rect paint live in `passport_core::stack`.
+//! Shout to scare ghosts. Logic lives in `passport_core::boo`.
 
 use passport_core::AppId;
 use passport_core::api::{
     App, Battery, ClippedDraw, Cx, NullAudio, NullPower, NullRadio, Store, apply_notes,
 };
+use passport_core::boo::{
+    BOO_APP_ID, BooState, BooWorld, is_boo_lane_key, is_boo_roar_key, read_best, write_best,
+};
 use passport_core::compositor::Rect;
 use passport_core::flap::Redraw;
 use passport_core::input::ButtonEvent;
-use passport_core::stack::{
-    STACK_APP_ID, StackState, StackWorld, is_stack_input, read_best, write_best,
-};
+use passport_core::mic::MicEvent;
 use passport_core::theme::Palette;
 
 use crate::draw::{LcdDraw, content_rect};
 use crate::st7789::St7789;
 
-pub const STACK_ID: AppId = STACK_APP_ID;
+pub const BOO_ID: AppId = BOO_APP_ID;
 
-fn save_best_if_higher(app: &StackApp, cx: &mut Cx<'_>) {
+fn save_best_if_higher(app: &BooApp, cx: &mut Cx<'_>) {
     if app.world.best > read_best(cx.store) {
         write_best(cx.store, app.world.best);
     }
 }
 
-pub struct StackApp {
-    world: StackWorld,
+pub struct BooApp {
+    world: BooWorld,
 }
 
-impl StackApp {
-    pub fn new() -> Self {
+impl BooApp {
+    pub const fn new() -> Self {
         Self {
-            world: StackWorld::new(0x51AC_B10C),
+            world: BooWorld::new(0xB00_5CA4E),
         }
     }
 
@@ -43,30 +44,37 @@ impl StackApp {
     }
 }
 
-impl App for StackApp {
+impl App for BooApp {
     fn id(&self) -> AppId {
-        STACK_ID
+        BOO_ID
     }
     fn name(&self) -> &'static str {
-        "stack"
+        "boo"
     }
     fn title(&self) -> &'static str {
-        "Stack"
+        "Boo"
     }
     fn blurb(&self) -> &'static str {
-        "drop slabs"
+        "shout scare"
     }
 
     fn on_start(&mut self, cx: &mut Cx<'_>) {
         self.world.reset();
         self.world.seed_best(read_best(cx.store));
-        esp_println::println!("[app] stack start best={}", self.world.best);
+        esp_println::println!("[app] boo start best={}", self.world.best);
     }
 
     fn on_key(&mut self, _cx: &mut Cx<'_>, ev: ButtonEvent) {
-        if is_stack_input(ev) {
-            self.world.drop();
+        if is_boo_roar_key(ev) {
+            self.world.roar(false);
         }
+        if is_boo_lane_key(ev) {
+            self.world.nudge_lane(ev);
+        }
+    }
+
+    fn on_mic(&mut self, _cx: &mut Cx<'_>, ev: MicEvent) {
+        self.world.on_mic(ev);
     }
 
     fn on_stop(&mut self, cx: &mut Cx<'_>) {
@@ -78,9 +86,9 @@ impl App for StackApp {
     }
 
     fn on_tick(&mut self, cx: &mut Cx<'_>, _dt_ms: u32) {
-        let lived = self.world.state != StackState::Dead;
+        let lived = self.world.state != BooState::Dead;
         self.world.tick();
-        if lived && self.world.state == StackState::Dead {
+        if lived && self.world.state == BooState::Dead {
             save_best_if_higher(self, cx);
         }
     }
@@ -91,7 +99,7 @@ impl App for StackApp {
     }
 }
 
-pub fn paint<SPI, DC, CS, E>(lcd: &mut St7789<SPI, DC, CS>, app: &StackApp, p: Palette, live: bool)
+pub fn paint<SPI, DC, CS, E>(lcd: &mut St7789<SPI, DC, CS>, app: &BooApp, p: Palette, live: bool)
 where
     SPI: embedded_hal::spi::SpiBus<u8, Error = E>,
     DC: embedded_hal::digital::OutputPin,
@@ -105,11 +113,12 @@ where
 }
 
 pub fn dispatch(
-    app: &mut StackApp,
+    app: &mut BooApp,
     notes: &[passport_core::AppLifecycle],
     adc_mv: u16,
     tick: bool,
     store: &mut dyn Store,
+    mic_level: u8,
 ) {
     let vp = content_rect();
     let mut draw = passport_core::api::NullDraw::new(vp);
@@ -126,7 +135,7 @@ pub fn dispatch(
         Battery::unknown(),
         100,
         adc_mv,
-        0,
+        mic_level,
     );
     apply_notes(app, notes, &mut cx);
     if tick {

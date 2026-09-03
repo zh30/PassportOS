@@ -4,10 +4,10 @@
 
 use passport_core::api::{Draw, MemoryStore, MeteredDraw, NullDraw, Store};
 use passport_core::board::{Key, LCD_H, LCD_W, TYPICAL_OK_MV};
-use passport_core::compositor::{rgb565_bytes, spi_time_us, Rect, LIVE_SPI_BUDGET, STATUS_BAR_H};
+use passport_core::compositor::{LIVE_SPI_BUDGET, Rect, STATUS_BAR_H, rgb565_bytes, spi_time_us};
 use passport_core::flap::{
-    is_flap_input, live_budget_holds, read_best, write_best, FlapState, FlapWorld, Redraw, BIRD_H,
-    BEST_KEY, COL_PIPE, COL_SKY, PIPE_W, SCROLL, WORLD_H, WORLD_W,
+    BEST_KEY, BIRD_H, COL_PIPE, COL_SKY, FlapState, FlapWorld, PIPE_W, Redraw, SCROLL, WORLD_H,
+    WORLD_W, is_flap_input, live_budget_holds, read_best, write_best,
 };
 use passport_core::input::{ButtonDecoder, ButtonEvent};
 use passport_core::theme::Palette;
@@ -117,7 +117,10 @@ fn ready_is_full_once_then_idle() {
 fn playfield_fill_exceeds_live_budget() {
     assert!(live_budget_holds());
     let full = rgb565_bytes(WORLD_W as u16, WORLD_H as u16);
-    assert!(full > LIVE_SPI_BUDGET * 8, "full fill {full} vs budget {LIVE_SPI_BUDGET}");
+    assert!(
+        full > LIVE_SPI_BUDGET * 8,
+        "full fill {full} vs budget {LIVE_SPI_BUDGET}"
+    );
     assert!(
         spi_time_us(full) > 20_000,
         "a content wipe must not fit in the 20 ms input period, got {} us",
@@ -417,7 +420,10 @@ fn live_scroll_keeps_pipe_body_green() {
         if w.state != FlapState::Playing {
             break;
         }
-        if let Some(p) = w.pipes().into_iter().find(|p| p.x > 4 && p.x + PIPE_W < WORLD_W - 4)
+        if let Some(p) = w
+            .pipes()
+            .into_iter()
+            .find(|p| p.x > 4 && p.x + PIPE_W < WORLD_W - 4)
         {
             on_screen = Some(p);
             break;

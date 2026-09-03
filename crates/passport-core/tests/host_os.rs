@@ -1,25 +1,27 @@
 //! Host tests against the *shipped* decoder, tiler, launcher, workspaces, and app registry.
 //! These call `passport_core` public functions — they do not reimplement the millivolt windows.
 
-use passport_core::app::{AppId, AppLifecycle};
-use passport_core::brick::BRICK_APP_ID;
-use passport_core::flap::FLAP_APP_ID;
-use passport_core::stack::STACK_APP_ID;
-use passport_core::board::{
-    adc_bar_width, battery_poll_due, decode_millivolts, idle_telemetry_due, Key, KeyState,
-    FLASH_APP_OFFSET, FLASH_APP_SIZE, FLASH_CARDID_OFFSET, FLASH_KV_OFFSET, FLASH_KV_SIZE,
-    IDLE_TELEMETRY_PERIOD_TICKS, LCD_H, TYPICAL_DOWN_MV, TYPICAL_OK_MV, TYPICAL_RELEASED_MV,
-    TYPICAL_UP_MV,
-};
-use passport_core::compositor::{layout_tiles, STATUS_BAR_H};
-use passport_core::console::parse_line;
-use passport_core::input::{ButtonDecoder, ButtonEvent, LONG_PRESS_MS};
-use passport_core::radio::{ExclusiveManager, Resource};
-use passport_core::menu::{MenuAction, MENU_ITEMS};
-use passport_core::paint::{FrameSig, PaintPlan};
-use passport_core::shell::{Overlay, Shell, SideEffect};
-use passport_core::theme::Theme;
 use passport_core::Command;
+use passport_core::app::{AppId, AppLifecycle};
+use passport_core::board::{
+    FLASH_APP_OFFSET, FLASH_APP_SIZE, FLASH_CARDID_OFFSET, FLASH_KV_OFFSET, FLASH_KV_SIZE,
+    IDLE_TELEMETRY_PERIOD_TICKS, Key, KeyState, LCD_H, TYPICAL_DOWN_MV, TYPICAL_OK_MV,
+    TYPICAL_RELEASED_MV, TYPICAL_UP_MV, adc_bar_width, battery_poll_due, decode_millivolts,
+    idle_telemetry_due,
+};
+use passport_core::boo::BOO_APP_ID;
+use passport_core::brick::BRICK_APP_ID;
+use passport_core::compositor::{STATUS_BAR_H, layout_tiles};
+use passport_core::console::parse_line;
+use passport_core::flap::FLAP_APP_ID;
+use passport_core::input::{ButtonDecoder, ButtonEvent, LONG_PRESS_MS};
+
+use passport_core::menu::{MENU_ITEMS, MenuAction};
+use passport_core::paint::{FrameSig, PaintPlan};
+use passport_core::radio::{ExclusiveManager, Resource};
+use passport_core::shell::{Overlay, Shell, SideEffect};
+use passport_core::stack::STACK_APP_ID;
+use passport_core::theme::Theme;
 
 const PULSE: AppId = AppId(1);
 const METER: AppId = AppId(2);
@@ -39,8 +41,13 @@ fn home_is_launcher_with_sample_app() {
     assert!(sh.launcher().is_open());
     let names = sh.launcher_names();
     assert!(
-        names.iter().any(|n| *n == "pulse"),
-        "home launcher must list pulse, got {names:?}"
+        names.iter().any(|n| *n == "tools"),
+        "home is islands, got {names:?}"
+    );
+    assert!(names.iter().any(|n| *n == "system"), "{names:?}");
+    assert!(
+        !names.iter().any(|n| *n == "pulse"),
+        "apps live inside islands, got {names:?}"
     );
     let screen = sh.status.format_screen();
     assert!(
@@ -94,7 +101,10 @@ fn millivolts_map_official_windows() {
     assert_eq!(decode_millivolts(TYPICAL_UP_MV), KeyState::Down(Key::Up));
     assert_eq!(decode_millivolts(0), KeyState::Down(Key::Up));
     assert_eq!(decode_millivolts(149), KeyState::Down(Key::Up));
-    assert_eq!(decode_millivolts(TYPICAL_DOWN_MV), KeyState::Down(Key::Down));
+    assert_eq!(
+        decode_millivolts(TYPICAL_DOWN_MV),
+        KeyState::Down(Key::Down)
+    );
     assert_eq!(decode_millivolts(150), KeyState::Down(Key::Down));
     assert_eq!(decode_millivolts(446), KeyState::Down(Key::Down));
     assert_eq!(decode_millivolts(TYPICAL_OK_MV), KeyState::Down(Key::Ok));
@@ -126,7 +136,9 @@ fn click_vs_long_press_uses_shipped_decoder() {
         "expected Click from shipped decoder, got {events:?}"
     );
     assert!(
-        !events.iter().any(|e| matches!(e, ButtonEvent::LongPress(_))),
+        !events
+            .iter()
+            .any(|e| matches!(e, ButtonEvent::LongPress(_))),
         "short hold must not long-press: {events:?}"
     );
 
@@ -196,7 +208,10 @@ fn rapid_ok_taps_at_input_cadence() {
         .iter()
         .filter(|e| matches!(e, ButtonEvent::Press(Key::Ok)))
         .count();
-    assert_eq!(presses, 2, "5 ms cadence must see both taps, got {events:?}");
+    assert_eq!(
+        presses, 2,
+        "5 ms cadence must see both taps, got {events:?}"
+    );
 }
 
 fn feed_seq(dec: &mut ButtonDecoder, samples: &[u16]) -> Vec<ButtonEvent> {
@@ -276,7 +291,7 @@ fn ladder_ramp_on_home_navigates_instead_of_opening_pulse() {
     sh.enter_home();
     assert_eq!(sh.launcher().selected, 0);
     let n = sh.launcher_names().len();
-    assert!(n >= 3, "home lists pulse/meter/system, got {n}");
+    assert!(n >= 2, "home lists islands + system, got {n}");
     assert!(
         !sh.launcher_names().iter().any(|n| *n == "keys"),
         "keys belongs in the system menu, not the launcher"
@@ -284,8 +299,15 @@ fn ladder_ramp_on_home_navigates_instead_of_opening_pulse() {
 
     // Same millivolt walk as a physical UP press.
     for mv in [
-        900u16, 900, 900, TYPICAL_DOWN_MV, TYPICAL_DOWN_MV, TYPICAL_UP_MV, TYPICAL_UP_MV,
-        TYPICAL_UP_MV, TYPICAL_UP_MV,
+        900u16,
+        900,
+        900,
+        TYPICAL_DOWN_MV,
+        TYPICAL_DOWN_MV,
+        TYPICAL_UP_MV,
+        TYPICAL_UP_MV,
+        TYPICAL_UP_MV,
+        TYPICAL_UP_MV,
     ] {
         sh.tick_mv(mv, 20);
     }
@@ -305,8 +327,15 @@ fn ladder_ramp_on_home_navigates_instead_of_opening_pulse() {
 
     // Physical DOWN from the wrapped item should move toward pulse, not activate.
     let start = sh.launcher().selected;
-    for mv in [900u16, 900, 900, TYPICAL_DOWN_MV, TYPICAL_DOWN_MV, TYPICAL_DOWN_MV, TYPICAL_DOWN_MV]
-    {
+    for mv in [
+        900u16,
+        900,
+        900,
+        TYPICAL_DOWN_MV,
+        TYPICAL_DOWN_MV,
+        TYPICAL_DOWN_MV,
+        TYPICAL_DOWN_MV,
+    ] {
         sh.tick_mv(mv, 20);
     }
     for _ in 0..5 {
@@ -327,10 +356,9 @@ fn launcher_open_filter_activate() {
     assert!(sh.launcher().is_open());
     let names = sh.launcher_names();
     assert!(
-        names.iter().any(|n| *n == "pulse"),
-        "launcher must list the sample app, got {names:?}"
+        names.iter().any(|n| *n == "tools"),
+        "launcher home is islands, got {names:?}"
     );
-    assert!(names.iter().any(|n| *n == "meter"));
     assert!(names.iter().any(|n| *n == "system"));
 
     // Filter is a shipped launcher operation (prefix match).
@@ -351,12 +379,16 @@ fn launcher_open_filter_activate() {
     // Activate the filtered selection through the same activate path the console uses.
     let out = sh.apply_command(Command::ActivateSelected);
     assert!(
-        out.lifecycle.iter().any(|e| *e == AppLifecycle::Start(PULSE)),
+        out.lifecycle
+            .iter()
+            .any(|e| *e == AppLifecycle::Start(PULSE)),
         "activate must Start pulse via registry, got {:?}",
         out.lifecycle
     );
     assert!(
-        out.lifecycle.iter().any(|e| *e == AppLifecycle::Focus(PULSE)),
+        out.lifecycle
+            .iter()
+            .any(|e| *e == AppLifecycle::Focus(PULSE)),
         "activate must Focus pulse, got {:?}",
         out.lifecycle
     );
@@ -407,14 +439,21 @@ fn workspace_switch_and_app_lifecycle() {
     assert!(notes.contains(&AppLifecycle::Start(METER)));
     assert!(notes.contains(&AppLifecycle::Focus(METER)));
     assert!(notes.contains(&AppLifecycle::Blur(PULSE)));
-    assert_eq!(sh.tile_count(), 2, "two apps on one workspace split the surface");
+    assert_eq!(
+        sh.tile_count(),
+        2,
+        "two apps on one workspace split the surface"
+    );
     assert_eq!(sh.layout().tiles.len(), 2);
 
     // UP long-press stays on workspace 0; DOWN long-press switches to workspace 1.
     let notes = sh.synth_long(Key::Down);
     assert_eq!(sh.current_workspace(), 1);
     assert!(
-        notes.lifecycle.iter().any(|e| matches!(e, AppLifecycle::Blur(_))),
+        notes
+            .lifecycle
+            .iter()
+            .any(|e| matches!(e, AppLifecycle::Blur(_))),
         "leaving a workspace blurs the focused app: {:?}",
         notes.lifecycle
     );
@@ -511,15 +550,17 @@ fn console_drive_launcher_workspace_same_path_as_usb() {
     let out = sh.apply_command(parse_line("launcher").unwrap());
     println!("DRIVE {out:?}");
     assert!(
-        out.reply.contains("pulse"),
-        "launcher must list sample app pulse: {}",
+        out.reply.contains("tools") && out.reply.contains("system"),
+        "launcher home lists islands: {}",
         out.reply
     );
     let out = sh.apply_command(parse_line("activate pulse").unwrap());
     println!("DRIVE activate {}", out.reply);
     assert_eq!(sh.focused_app_name(), Some("pulse"));
     assert!(
-        out.lifecycle.iter().any(|e| *e == AppLifecycle::Focus(PULSE)),
+        out.lifecycle
+            .iter()
+            .any(|e| *e == AppLifecycle::Focus(PULSE)),
         "activating pulse must change focus: {:?}",
         out.lifecycle
     );
@@ -556,11 +597,22 @@ fn system_menu_and_cheatsheet_from_launcher() {
     select_menu_action(&mut sh, MenuAction::About);
     sh.handle_event(ButtonEvent::Click(Key::Ok));
     assert_eq!(sh.overlay(), Overlay::About);
-    assert!(passport_core::keymap::ABOUT.iter().any(|l| l.contains("PassportOS")));
-    assert!(passport_core::keymap::ABOUT.iter().any(|l| l.contains("NTAG213")));
+    assert!(
+        passport_core::keymap::ABOUT
+            .iter()
+            .any(|l| l.contains("PassportOS"))
+    );
+    assert!(
+        passport_core::keymap::ABOUT
+            .iter()
+            .any(|l| l.contains("NTAG213"))
+    );
 
     sh.handle_event(ButtonEvent::Click(Key::Down));
-    assert_eq!(sh.overlay(), Overlay::System);
+    assert_eq!(sh.overlay(), Overlay::About, "Down opens the storage page");
+    assert_eq!(sh.about_page(), 1);
+    sh.handle_event(ButtonEvent::Click(Key::Ok));
+    assert_eq!(sh.overlay(), Overlay::System, "about OK returns to menu");
 
     select_menu_action(&mut sh, MenuAction::Close);
     sh.handle_event(ButtonEvent::Click(Key::Ok));
@@ -568,7 +620,11 @@ fn system_menu_and_cheatsheet_from_launcher() {
 
     assert!(MENU_ITEMS.iter().any(|i| i.action == MenuAction::Keys));
     assert!(MENU_ITEMS.iter().any(|i| i.action == MenuAction::About));
-    assert!(MENU_ITEMS.iter().any(|i| i.action == MenuAction::ThemeToggle));
+    assert!(
+        MENU_ITEMS
+            .iter()
+            .any(|i| i.action == MenuAction::ThemeToggle)
+    );
     assert_eq!(passport_core::keymap::ABOUT.len(), 9);
 
     let mut sh = shell_with_apps();
@@ -589,7 +645,11 @@ fn select_menu_action(sh: &mut Shell, want: MenuAction) {
         .expect("menu item exists");
     while sh.menu_selected() != idx {
         let out = sh.handle_event(ButtonEvent::Click(Key::Down));
-        assert_eq!(out.side, SideEffect::None, "move must not fire side effects");
+        assert_eq!(
+            out.side,
+            SideEffect::None,
+            "move must not fire side effects"
+        );
     }
 }
 
@@ -640,7 +700,11 @@ fn paint_plan_first_frame_is_full_not_whole_panel_hint() {
     let plan = PaintPlan::diff(None, FrameSig::capture(&sh));
     assert!(plan.wipe_content);
     assert_eq!(plan.wipe_rows(), LCD_H - STATUS_BAR_H);
-    assert_ne!(plan.wipe_rows(), LCD_H, "content wipe must leave the status bar");
+    assert_ne!(
+        plan.wipe_rows(),
+        LCD_H,
+        "content wipe must leave the status bar"
+    );
     assert!(plan.desktop);
     assert!(plan.status);
     assert!(!plan.pulse);
@@ -669,13 +733,18 @@ fn battery_poll_is_seconds_not_subsecond() {
 #[test]
 fn shell_boot_holds_no_audio_or_radio() {
     let sh = Shell::new();
-    assert!(sh.exclusive.is_free(), "DMA/radio must not be acquired at idle boot");
+    assert!(
+        sh.exclusive.is_free(),
+        "DMA/radio must not be acquired at idle boot"
+    );
 }
 
 #[test]
 fn ntag213_ndef_uri_roundtrip_and_mcu_has_no_bus() {
-    use passport_core::nfc::{decode_uri_tlv, encode_uri_tlv, mcu_read, mcu_write, DEFAULT_URI, NTAG213};
     use passport_core::ApiError;
+    use passport_core::nfc::{
+        DEFAULT_URI, NTAG213, decode_uri_tlv, encode_uri_tlv, mcu_read, mcu_write,
+    };
 
     assert_eq!(NTAG213.name, "NTAG213");
     assert_eq!(NTAG213.user_bytes, 144);
@@ -691,7 +760,10 @@ fn ntag213_ndef_uri_roundtrip_and_mcu_has_no_bus() {
     assert_eq!(back.as_str(), DEFAULT_URI);
 
     let n = encode_uri_tlv("http://www.example.com/x", &mut buf).unwrap();
-    assert_eq!(decode_uri_tlv(&buf[..n]).unwrap().as_str(), "http://www.example.com/x");
+    assert_eq!(
+        decode_uri_tlv(&buf[..n]).unwrap().as_str(),
+        "http://www.example.com/x"
+    );
 }
 
 #[test]
@@ -701,8 +773,8 @@ fn console_nfc_and_launcher_list_tap_app() {
     sh.enter_home();
     let names = sh.launcher_names();
     assert!(
-        names.iter().any(|n| *n == "nfc"),
-        "launcher must list nfc, got {names:?}"
+        names.iter().any(|n| *n == "tools"),
+        "nfc lives under tools, got {names:?}"
     );
     let out = sh.apply_command(parse_line("nfc").unwrap());
     assert!(out.reply.contains("NTAG213"), "{}", out.reply);
@@ -713,10 +785,123 @@ fn console_nfc_and_launcher_list_tap_app() {
     let _ = out;
 }
 
-#[test]
-fn paint_plan_launcher_move_only_two_cards() {
-    let mut sh = shell_with_apps();
+fn shell_full_launcher() -> Shell {
+    let mut sh = Shell::new();
+    sh.register_app(PULSE, "pulse").unwrap();
+    sh.register_app(AppId(3), "nfc").unwrap();
+    sh.register_app(FLAP_APP_ID, "flap").unwrap();
+    sh.register_app(STACK_APP_ID, "stack").unwrap();
+    sh.register_app(BRICK_APP_ID, "brick").unwrap();
+    sh.register_app(BOO_APP_ID, "boo").unwrap();
+    sh.register_app(passport_core::TUNE_APP_ID, "tune").unwrap();
     sh.enter_home();
+    sh
+}
+
+#[test]
+fn launcher_islands_fit_and_system_is_on_the_first_screen() {
+    let mut sh = shell_full_launcher();
+    let names = sh.launcher_names();
+    assert_eq!(&names[..], &["play", "tools", "system"]);
+    assert_eq!(sh.launcher_window(), (0, 3));
+    assert_eq!(sh.launcher().selected, 0);
+    let _ = sh.synth_click(Key::Down);
+    let _ = sh.synth_click(Key::Down);
+    assert_eq!(sh.launcher().selected, 2);
+    let out = sh.handle_event(ButtonEvent::Click(Key::Ok));
+    assert_eq!(sh.overlay(), Overlay::System);
+    let _ = out;
+}
+
+#[test]
+fn island_captions_on_the_full_home_fit_the_card() {
+    use passport_core::{
+        FONT_2X_W, LauncherGroup, display_name, is_lcd_ascii, island_blurb_cols, island_caption,
+        island_text_end, island_text_x, system_caption,
+    };
+    let sh = shell_full_launcher();
+    let slots = sh.registry.slots();
+    let play = island_caption(LauncherGroup::Play, slots);
+    let tools = island_caption(LauncherGroup::Tools, slots);
+    assert_eq!(play.as_str(), "Flap Stack Brick Boo");
+    assert_eq!(tools.as_str(), "Pulse Tap Tune");
+    for s in [play.as_str(), tools.as_str(), system_caption()] {
+        assert!(is_lcd_ascii(s), "{s}");
+        assert!(
+            s.len() <= island_blurb_cols(),
+            "{s} is {} cols, island holds {}",
+            s.len(),
+            island_blurb_cols()
+        );
+    }
+    let budget = island_text_end().saturating_sub(island_text_x());
+    for name in ["play", "tools", "system"] {
+        let title = display_name(name);
+        let px = (title.len() as u16).saturating_mul(FONT_2X_W);
+        assert!(px <= budget, "{title} 2x is {px}px, column {budget}px");
+    }
+}
+
+#[test]
+fn play_island_drills_in_and_up_zooms_out() {
+    let mut sh = shell_full_launcher();
+    assert_eq!(sh.launcher_names()[0], "play");
+    sh.handle_event(ButtonEvent::Click(Key::Ok));
+    let names = sh.launcher_names();
+    assert!(
+        names.iter().any(|n| *n == "flap"),
+        "play group must list games, got {names:?}"
+    );
+    assert!(
+        !names.iter().any(|n| *n == "system"),
+        "system stays on the island screen, got {names:?}"
+    );
+    assert_eq!(sh.overlay(), Overlay::Launcher);
+    sh.handle_event(ButtonEvent::Click(Key::Up));
+    assert_eq!(&sh.launcher_names()[..], &["play", "tools", "system"]);
+    assert_eq!(sh.launcher().selected, 0);
+}
+
+#[test]
+fn launcher_drill_in_repaints_the_page() {
+    let mut sh = shell_full_launcher();
+    let prev = FrameSig::capture(&sh);
+    sh.handle_event(ButtonEvent::Click(Key::Ok));
+    let plan = PaintPlan::diff(Some(prev), FrameSig::capture(&sh));
+    assert!(plan.wipe_content, "islands → group is a new page");
+    assert!(plan.desktop);
+}
+
+#[test]
+fn paint_plan_island_move_repaints_islands_not_rows() {
+    let mut sh = shell_full_launcher();
+    assert!(sh.launcher().is_islands());
+    let prev = FrameSig::capture(&sh);
+    sh.handle_event(ButtonEvent::Click(Key::Down));
+    assert!(
+        sh.launcher().is_islands(),
+        "DOWN on home stays on islands, got {:?}",
+        sh.launcher_names()
+    );
+    assert_eq!(sh.launcher().selected, 1);
+    let plan = PaintPlan::diff(Some(prev), FrameSig::capture(&sh));
+    assert!(!plan.wipe_content, "moving island focus must not wipe");
+    assert!(
+        plan.desktop,
+        "islands are 88px cards; must repaint the island page, not 44px rows"
+    );
+    assert!(
+        plan.launcher_cards.is_none(),
+        "got {:?}",
+        plan.launcher_cards
+    );
+}
+
+#[test]
+fn paint_plan_group_move_only_two_rows() {
+    let mut sh = shell_full_launcher();
+    sh.handle_event(ButtonEvent::Click(Key::Ok));
+    assert!(!sh.launcher().is_islands());
     let prev = FrameSig::capture(&sh);
     sh.handle_event(ButtonEvent::Click(Key::Down));
     let plan = PaintPlan::diff(Some(prev), FrameSig::capture(&sh));
@@ -725,6 +910,40 @@ fn paint_plan_launcher_move_only_two_cards() {
     assert!(!plan.desktop);
     assert!(!plan.pulse);
     assert_eq!(plan.launcher_cards, Some((0, 1)));
+}
+
+#[test]
+fn group_up_on_first_item_repaints_islands() {
+    let mut sh = shell_full_launcher();
+    sh.handle_event(ButtonEvent::Click(Key::Ok));
+    assert_eq!(
+        &sh.launcher_names()[..4],
+        &["flap", "stack", "brick", "boo"]
+    );
+    let prev = FrameSig::capture(&sh);
+    sh.handle_event(ButtonEvent::Click(Key::Up));
+    assert!(sh.launcher().is_islands());
+    assert_eq!(&sh.launcher_names()[..], &["play", "tools", "system"]);
+    let plan = PaintPlan::diff(Some(prev), FrameSig::capture(&sh));
+    assert!(plan.wipe_content, "group → islands is a new page");
+    assert!(plan.desktop);
+    assert!(plan.launcher_cards.is_none());
+}
+
+#[test]
+fn long_ok_in_a_group_returns_to_islands_not_an_empty_desk() {
+    let mut sh = shell_full_launcher();
+    sh.handle_event(ButtonEvent::Click(Key::Ok));
+    assert!(!sh.launcher().is_islands());
+    sh.handle_event(ButtonEvent::LongPress(Key::Ok));
+    assert_eq!(sh.overlay(), Overlay::Launcher);
+    assert!(sh.launcher().is_open());
+    assert!(
+        sh.launcher().is_islands(),
+        "Long OK in a group is back, not close; names {:?}",
+        sh.launcher_names()
+    );
+    assert_eq!(&sh.launcher_names()[..], &["play", "tools", "system"]);
 }
 
 #[test]
@@ -751,7 +970,7 @@ fn paint_plan_overlay_change_is_content_wipe_only() {
     let mut sh = shell_with_apps();
     sh.enter_home();
     let prev = FrameSig::capture(&sh);
-    sh.handle_event(ButtonEvent::Click(Key::Ok));
+    sh.apply_command(parse_line("activate pulse").unwrap());
     let plan = PaintPlan::diff(Some(prev), FrameSig::capture(&sh));
     assert!(plan.wipe_content);
     assert!(plan.pulse);
@@ -816,7 +1035,10 @@ fn paint_plan_opening_flap_does_not_double_wipe() {
     let plan = PaintPlan::diff(Some(prev), FrameSig::capture(&sh));
     assert_eq!(sh.overlay(), Overlay::None);
     assert!(plan.game);
-    assert!(!plan.wipe_content, "flap fills the tile; compositor must not also wipe");
+    assert!(
+        !plan.wipe_content,
+        "flap fills the tile; compositor must not also wipe"
+    );
     assert!(!plan.desktop);
 }
 
@@ -858,7 +1080,10 @@ fn rapid_ok_taps_each_reach_focused_flap() {
         let _ = sh.tick_mv(TYPICAL_RELEASED_MV, 20);
         let _ = cycle;
     }
-    assert_eq!(presses, 2, "mashing OK must deliver two Press events to flap");
+    assert_eq!(
+        presses, 2,
+        "mashing OK must deliver two Press events to flap"
+    );
 }
 
 #[test]
@@ -867,6 +1092,8 @@ fn game_up_down_does_not_steal_focus_or_workspace() {
         (FLAP_APP_ID, "flap"),
         (STACK_APP_ID, "stack"),
         (BRICK_APP_ID, "brick"),
+        (BOO_APP_ID, "boo"),
+        (passport_core::TUNE_APP_ID, "tune"),
     ] {
         let mut sh = shell_with_apps();
         sh.register_app(id, name).unwrap();
@@ -878,7 +1105,11 @@ fn game_up_down_does_not_steal_focus_or_workspace() {
         let ws = sh.current_workspace();
 
         let out = sh.handle_event(ButtonEvent::Click(Key::Up));
-        assert_eq!(sh.focused_app_name(), Some(name), "{name} click up stole focus");
+        assert_eq!(
+            sh.focused_app_name(),
+            Some(name),
+            "{name} click up stole focus"
+        );
         assert_eq!(sh.current_workspace(), ws);
         assert!(
             out.lifecycle.iter().any(|n| matches!(
@@ -904,7 +1135,11 @@ fn game_up_down_does_not_steal_focus_or_workspace() {
         assert_eq!(sh.focused_app_name(), Some(name));
 
         sh.handle_event(ButtonEvent::LongPress(Key::Ok));
-        assert_eq!(sh.overlay(), Overlay::Launcher, "{name} long OK is still home");
+        assert_eq!(
+            sh.overlay(),
+            Overlay::Launcher,
+            "{name} long OK is still home"
+        );
     }
 }
 

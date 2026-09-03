@@ -54,8 +54,14 @@ impl Rect {
     pub fn intersection(self, other: Rect) -> Option<Rect> {
         let x = self.x.max(other.x);
         let y = self.y.max(other.y);
-        let x2 = self.x.saturating_add(self.w).min(other.x.saturating_add(other.w));
-        let y2 = self.y.saturating_add(self.h).min(other.y.saturating_add(other.h));
+        let x2 = self
+            .x
+            .saturating_add(self.w)
+            .min(other.x.saturating_add(other.w));
+        let y2 = self
+            .y
+            .saturating_add(self.h)
+            .min(other.y.saturating_add(other.h));
         if x2 > x && y2 > y {
             Some(Rect {
                 x,

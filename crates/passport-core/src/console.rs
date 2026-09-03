@@ -16,7 +16,10 @@ pub enum Command {
     ActivateSelected,
     ActivateName(heapless::String<16>),
     /// Single millivolt sample, `dt_ms` ticks of 20 ms (same path as ADC).
-    KeyMv { mv: u16, ticks: u8 },
+    KeyMv {
+        mv: u16,
+        ticks: u8,
+    },
     KeyClick(Key),
     KeyLong(Key),
     Brightness(u8),
@@ -28,6 +31,7 @@ pub enum Command {
     Probe,
     AudioBeep,
     AudioRec,
+    Mic,
     Nfc,
     Theme(crate::theme::Theme),
     ThemeToggle,
@@ -79,7 +83,11 @@ pub fn parse_line(line: &str) -> Result<Command, ParseError> {
             Ok(Command::Filter(s))
         }
         "workspace" | "ws" => {
-            let n: u8 = parts.next().ok_or(ParseError::BadArg)?.parse().map_err(|_| ParseError::BadArg)?;
+            let n: u8 = parts
+                .next()
+                .ok_or(ParseError::BadArg)?
+                .parse()
+                .map_err(|_| ParseError::BadArg)?;
             if n >= 2 {
                 return Err(ParseError::BadArg);
             }
@@ -95,7 +103,11 @@ pub fn parse_line(line: &str) -> Result<Command, ParseError> {
         },
         "key" => parse_key(parts),
         "brightness" | "bl" => {
-            let n: u8 = parts.next().ok_or(ParseError::BadArg)?.parse().map_err(|_| ParseError::BadArg)?;
+            let n: u8 = parts
+                .next()
+                .ok_or(ParseError::BadArg)?
+                .parse()
+                .map_err(|_| ParseError::BadArg)?;
             Ok(Command::Brightness(n.min(100)))
         }
         "radio" => match parts.next() {
@@ -109,6 +121,7 @@ pub fn parse_line(line: &str) -> Result<Command, ParseError> {
             Some("deep") => Ok(Command::SleepDeep),
             _ => Err(ParseError::BadArg),
         },
+        "mic" => Ok(Command::Mic),
         "audio" => match parts.next() {
             Some("beep") | Some("play") => Ok(Command::AudioBeep),
             Some("rec") | Some("mic") => Ok(Command::AudioRec),
@@ -121,12 +134,16 @@ pub fn parse_line(line: &str) -> Result<Command, ParseError> {
 fn parse_key<'a>(mut parts: impl Iterator<Item = &'a str>) -> Result<Command, ParseError> {
     match parts.next() {
         Some("mv") => {
-            let mv: u16 = parts.next().ok_or(ParseError::BadArg)?.parse().map_err(|_| ParseError::BadArg)?;
-            let ticks: u8 = parts
+            let mv: u16 = parts
                 .next()
-                .map(|t| t.parse().unwrap_or(1))
-                .unwrap_or(1);
-            Ok(Command::KeyMv { mv, ticks: ticks.max(1) })
+                .ok_or(ParseError::BadArg)?
+                .parse()
+                .map_err(|_| ParseError::BadArg)?;
+            let ticks: u8 = parts.next().map(|t| t.parse().unwrap_or(1)).unwrap_or(1);
+            Ok(Command::KeyMv {
+                mv,
+                ticks: ticks.max(1),
+            })
         }
         Some(name) => {
             let key = match name {
@@ -150,6 +167,6 @@ help status apps launcher menu keys about probe nfc
 key mv <mV> [ticks] | key up|down|ok click|long
 workspace 0|1  filter <prefix>  activate [name]
 brightness 0-100  radio wifi|ble|off
-sleep light|deep  audio beep|rec  theme dark|light
+sleep light|deep  audio beep|rec  mic  theme dark|light
 time [HH:MM]
 ";

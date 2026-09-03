@@ -1,16 +1,16 @@
 //! Breakout. Logic and dirty-rect paint live in `passport_core::brick`.
 
+use passport_core::AppId;
 use passport_core::api::{
-    apply_notes, App, Battery, ClippedDraw, Cx, NullAudio, NullPower, NullRadio, Store,
+    App, Battery, ClippedDraw, Cx, NullAudio, NullPower, NullRadio, Store, apply_notes,
 };
-use passport_core::brick::{read_best, write_best, BrickState, BrickWorld, BRICK_APP_ID};
+use passport_core::brick::{BRICK_APP_ID, BrickState, BrickWorld, read_best, write_best};
 use passport_core::compositor::Rect;
 use passport_core::flap::Redraw;
 use passport_core::input::ButtonEvent;
 use passport_core::theme::Palette;
-use passport_core::AppId;
 
-use crate::draw::{content_rect, LcdDraw};
+use crate::draw::{LcdDraw, content_rect};
 use crate::st7789::St7789;
 
 pub const BRICK_ID: AppId = BRICK_APP_ID;
@@ -122,6 +122,7 @@ pub fn dispatch(
         Battery::unknown(),
         100,
         adc_mv,
+        0,
     );
     apply_notes(app, notes, &mut cx);
     if tick {

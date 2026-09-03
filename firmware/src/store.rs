@@ -3,13 +3,16 @@
 use esp_println::println;
 use esp_storage::FlashStorage;
 use passport_core::api::{ApiError, MemoryStore, Store};
-use passport_core::board::{FLASH_KV_OFFSET, FLASH_KV_SIZE};
-use passport_core::clock::TIME_KEY;
-use passport_core::flap::BEST_KEY as FLAP_BEST;
+use passport_core::board::{FLASH_APP_OFFSET, FLASH_KV_OFFSET, FLASH_KV_SIZE};
+use passport_core::boo::BEST_KEY as BOO_BEST;
 use passport_core::brick::BEST_KEY as BRICK_BEST;
+use passport_core::clock::TIME_KEY;
+use passport_core::factory_image_len;
+use passport_core::flap::BEST_KEY as FLAP_BEST;
 use passport_core::stack::BEST_KEY as STACK_BEST;
 
 const MAGIC: &[u8; 4] = b"POS1";
+const MAGIC2: &[u8; 4] = b"POS2";
 
 #[repr(align(4))]
 struct Slot([u8; 16]);
@@ -27,6 +30,15 @@ impl<'d> KvStore<'d> {
         };
         this.load();
         this
+    }
+
+    /// Factory image length from the 0xE9 header at [`FLASH_APP_OFFSET`].
+    pub fn factory_image_bytes(&mut self) -> Option<u32> {
+        factory_image_len(|off, buf| {
+            self.flash
+                .read_nor(FLASH_APP_OFFSET.saturating_add(off), buf)
+                .is_ok()
+        })
     }
 
     fn load(&mut self) {
@@ -71,6 +83,22 @@ impl<'d> KvStore<'d> {
                 }
             }
         }
+        let mut extra = Slot([0; 16]);
+        if self
+            .flash
+            .read_nor(FLASH_KV_OFFSET + 16, &mut extra.0)
+            .is_ok()
+            && &extra.0[..4] == MAGIC2
+        {
+            let sum = extra.0[0] ^ extra.0[1] ^ extra.0[2] ^ extra.0[3] ^ extra.0[4] ^ extra.0[5];
+            if extra.0[6] == sum {
+                let boo = u16::from_le_bytes([extra.0[4], extra.0[5]]);
+                let _ = self.ram.put(BOO_BEST, &boo.to_le_bytes());
+                if boo > 0 {
+                    println!("[store] boo best={boo}");
+                }
+            }
+        }
     }
 
     fn persist_slot(&mut self) {
@@ -96,6 +124,13 @@ impl<'d> KvStore<'d> {
         if self.ram.get(BRICK_BEST, &mut brk) == Some(2) {
             slot.0[14..16].copy_from_slice(&brk);
         }
+        let mut extra = Slot([0; 16]);
+        extra.0[..4].copy_from_slice(MAGIC2);
+        let mut boo = [0u8; 2];
+        if self.ram.get(BOO_BEST, &mut boo) == Some(2) {
+            extra.0[4..6].copy_from_slice(&boo);
+        }
+        extra.0[6] = extra.0[0] ^ extra.0[1] ^ extra.0[2] ^ extra.0[3] ^ extra.0[4] ^ extra.0[5];
         if self
             .flash
             .erase(FLASH_KV_OFFSET, FLASH_KV_OFFSET + FLASH_KV_SIZE)
@@ -106,6 +141,14 @@ impl<'d> KvStore<'d> {
         }
         if self.flash.write_nor(FLASH_KV_OFFSET, &slot.0).is_err() {
             println!("[store] write fail");
+            return;
+        }
+        if self
+            .flash
+            .write_nor(FLASH_KV_OFFSET + 16, &extra.0)
+            .is_err()
+        {
+            println!("[store] write2 fail");
             return;
         }
         println!("[store] saved");
@@ -119,8 +162,11 @@ impl Store for KvStore<'_> {
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<(), ApiError> {
         let mut old = [0u8; 2];
-        let flash_key =
-            key == FLAP_BEST || key == TIME_KEY || key == STACK_BEST || key == BRICK_BEST;
+        let flash_key = key == FLAP_BEST
+            || key == TIME_KEY
+            || key == STACK_BEST
+            || key == BRICK_BEST
+            || key == BOO_BEST;
         let unchanged = flash_key
             && val.len() >= 2
             && self.ram.get(key, &mut old) == Some(2)
