@@ -40,8 +40,24 @@ impl PitchBuf {
 
     /// Left channel of 16-bit LE stereo (L,R,L,R…).
     pub fn push_pcm16_le_left(&mut self, bytes: &[u8]) {
+        self.push_ch(bytes, 0)
+    }
+
+    /// Picks the louder of L/R each call — the ES8311 routes the analog mic to
+    /// whichever ADC channel the board wired, and we don't hardcode it.
+    pub fn push_pcm16_le_auto(&mut self, bytes: &[u8]) {
+        let mut energy = [0u64; 2];
         for c in bytes.chunks_exact(4) {
-            let s = i16::from_le_bytes([c[0], c[1]]);
+            energy[0] += i16::from_le_bytes([c[0], c[1]]).unsigned_abs() as u64;
+            energy[1] += i16::from_le_bytes([c[2], c[3]]).unsigned_abs() as u64;
+        }
+        let ch = if energy[1] > energy[0] { 1 } else { 0 };
+        self.push_ch(bytes, ch);
+    }
+
+    fn push_ch(&mut self, bytes: &[u8], ch: usize) {
+        for c in bytes.chunks_exact(4) {
+            let s = i16::from_le_bytes([c[ch * 2], c[ch * 2 + 1]]);
             self.samples[self.w] = s;
             self.w += 1;
             if self.w == PITCH_N {
@@ -110,10 +126,20 @@ pub fn amdf_hz(samples: &[i16], rate: u32, lo_hz: u16, hi_hz: u16) -> Option<u16
     let mut p = min_p;
     while p <= max_p {
         let n = samples.len() - p as usize;
+        // cost is a sum of non-negative diffs: once the running sum alone
+        // exceeds best * (n/2), the normalized result can't win — prune.
+        let limit = if best == i64::MAX {
+            i64::MAX
+        } else {
+            best.saturating_mul((n / 2).max(1) as i64)
+        };
         let mut cost = 0i64;
         let mut i = 0;
         while i < n {
             cost += (samples[i] as i32 - samples[i + p as usize] as i32).unsigned_abs() as i64;
+            if cost > limit {
+                break;
+            }
             i += 2;
         }
         cost /= (n / 2).max(1) as i64;

@@ -264,15 +264,19 @@ fn connect_result_and_long_ok_home() {
     sh.apply_wifi_scan(&sample_nets());
     sh.handle_event(ButtonEvent::Click(Key::Down));
     sh.handle_event(ButtonEvent::Click(Key::Ok));
-    sh.apply_wifi_result(true);
+    sh.apply_wifi_result(true, None);
     assert_eq!(sh.wifi().phase(), WifiPhase::Result);
     assert!(sh.wifi().result_ok());
     assert_eq!(sh.wifi().connected_ssid(), "Cafe");
     sh.handle_event(ButtonEvent::Click(Key::Ok));
     assert_eq!(sh.wifi().phase(), WifiPhase::List);
 
-    sh.apply_wifi_result(false);
+    sh.apply_wifi_result(false, Some(passport_core::wifi::WifiFail::Auth));
     assert!(!sh.wifi().result_ok());
+    assert_eq!(
+        sh.wifi().fail(),
+        Some(passport_core::wifi::WifiFail::Auth)
+    );
 
     let out = sh.handle_event(ButtonEvent::LongPress(Key::Ok));
     assert_eq!(out.side, SideEffect::None);
@@ -363,6 +367,167 @@ fn paint_plan_ime_insert_is_field_only() {
     assert!(!plan.wipe_content);
     assert!(plan.ime_field);
     assert!(plan.ime_keys.is_none());
+}
+
+#[test]
+fn wifi_join_console_connects_directly() {
+    let mut sh = Shell::new();
+    let out = sh.apply_command(parse_line("wifi join MyNet s3cret").unwrap());
+    assert_eq!(out.side, SideEffect::WifiConnect);
+    assert_eq!(sh.wifi_connect_ssid(), "MyNet");
+    assert_eq!(sh.wifi_connect_pass(), "s3cret");
+    assert!(!sh.wifi_connect_open());
+    assert_eq!(sh.wifi().phase(), WifiPhase::Connecting);
+
+    // Multi-word SSID: last token is the password.
+    let mut sh = Shell::new();
+    let out = sh.apply_command(parse_line("wifi join My Home Net pw").unwrap());
+    assert_eq!(out.side, SideEffect::WifiConnect);
+    assert_eq!(sh.wifi_connect_ssid(), "My Home Net");
+    assert_eq!(sh.wifi_connect_pass(), "pw");
+
+    // Open net: single token.
+    let mut sh = Shell::new();
+    let out = sh.apply_command(parse_line("wifi join Cafe").unwrap());
+    assert_eq!(out.side, SideEffect::WifiConnect);
+    assert_eq!(sh.wifi_connect_ssid(), "Cafe");
+    assert!(sh.wifi_connect_open());
+    assert_eq!(sh.wifi_connect_pass(), "");
+}
+
+#[test]
+fn connected_rows_offer_disconnect_and_forget() {
+    use passport_core::wifi::WifiRow;
+    let mut sh = Shell::new();
+    sh.apply_command(parse_line("radio wifi").unwrap());
+    sh.apply_wifi_scan(&sample_nets());
+    // Join Cafe (open, index 1).
+    sh.handle_event(ButtonEvent::Click(Key::Down));
+    sh.handle_event(ButtonEvent::Click(Key::Ok));
+    sh.apply_wifi_result(true, None);
+    sh.handle_event(ButtonEvent::Click(Key::Ok)); // result → list
+
+    let n = sh.wifi().nets().len();
+    assert_eq!(sh.wifi().row_kind(n), Some(WifiRow::Rescan));
+    assert_eq!(sh.wifi().row_kind(n + 1), Some(WifiRow::Disconnect));
+    assert_eq!(sh.wifi().row_kind(n + 2), Some(WifiRow::Forget));
+    assert_eq!(sh.wifi().row_count(), n + 3);
+}
+
+#[test]
+fn disconnect_row_drops_link_keeps_creds() {
+    let mut sh = Shell::new();
+    sh.apply_command(parse_line("radio wifi").unwrap());
+    sh.apply_wifi_scan(&sample_nets());
+    let out = sh.apply_command(parse_line("wifi join Cafe").unwrap());
+    assert_eq!(out.side, SideEffect::WifiConnect);
+    sh.apply_wifi_result(true, None);
+    sh.wifi_mut().commit_saved(&mut passport_core::api::MemoryStore::new());
+    sh.handle_event(ButtonEvent::Click(Key::Ok)); // result → list
+
+    // Move to the disconnect row and activate.
+    let n = sh.wifi().nets().len();
+    let want = n + 1;
+    for _ in 0..sh.wifi().row_count() * 2 {
+        if sh.wifi().selected() == want {
+            break;
+        }
+        sh.handle_event(ButtonEvent::Click(Key::Down));
+    }
+    assert_eq!(sh.wifi().selected(), want, "row must be reachable");
+    let out = sh.handle_event(ButtonEvent::Click(Key::Ok));
+    assert_eq!(out.side, SideEffect::WifiDisconnect);
+    assert_eq!(sh.wifi().connected_ssid(), "");
+    // Saved creds survive a disconnect (no auto-rejoin, explicit drop).
+    assert!(sh.wifi().saved().is_some());
+    assert_eq!(
+        sh.wifi_mut().note_drop(),
+        passport_core::wifi::WifiAction::None
+    );
+}
+
+#[test]
+fn forget_clears_saved_entry() {
+    let mut store = passport_core::api::MemoryStore::new();
+    let mut sh = Shell::new();
+    sh.apply_command(parse_line("wifi join Home").unwrap());
+    sh.apply_wifi_result(true, None);
+    sh.wifi_commit_saved(&mut store);
+    assert!(passport_core::wifi::SavedWifi::load(&store).is_some());
+    assert!(sh.wifi().saved().is_some());
+
+    let out = sh.apply_command(parse_line("wifi forget").unwrap());
+    assert_eq!(out.side, SideEffect::WifiForget);
+    assert!(sh.wifi().saved().is_none());
+}
+
+#[test]
+fn saved_creds_roundtrip_memory_store() {
+    use passport_core::wifi::SavedWifi;
+    let mut store = passport_core::api::MemoryStore::new();
+    let s = SavedWifi::new("HomeNet", "pw123", false).unwrap();
+    s.save(&mut store);
+    let got = SavedWifi::load(&store).expect("saved entry");
+    assert_eq!(got.ssid.as_str(), "HomeNet");
+    assert_eq!(got.pass.as_str(), "pw123");
+    assert!(!got.open);
+
+    SavedWifi::erase(&mut store);
+    assert!(SavedWifi::load(&store).is_none());
+}
+
+#[test]
+fn drop_on_open_saved_auto_rejoins_bounded() {
+    use passport_core::wifi::{REJOIN_MAX, WifiAction};
+    let mut sh = Shell::new();
+    sh.apply_command(parse_line("wifi join Cafe").unwrap()); // open
+    sh.apply_wifi_result(true, None);
+    sh.wifi_mut().commit_saved(&mut passport_core::api::MemoryStore::new());
+
+    // Each drop asks for a rejoin, up to REJOIN_MAX.
+    for i in 0..REJOIN_MAX {
+        // Rejoin "succeeds" the link only when apply_result runs; a drop while
+        // Connecting ends as a failed join instead.
+        sh.apply_wifi_result(true, None);
+        let act = sh.wifi_mut().note_drop();
+        assert_eq!(act, WifiAction::Connect, "drop {i} should rejoin");
+    }
+    // Past the cap, drops stop rejoining.
+    sh.apply_wifi_result(true, None);
+    let act = sh.wifi_mut().note_drop();
+    assert_eq!(act, WifiAction::None);
+    assert_eq!(sh.wifi().connected_ssid(), "");
+}
+
+#[test]
+fn drop_during_connect_is_a_failed_join() {
+    use passport_core::wifi::WifiFail;
+    let mut sh = Shell::new();
+    sh.apply_command(parse_line("wifi join Cafe").unwrap());
+    assert_eq!(sh.wifi().phase(), WifiPhase::Connecting);
+    let side = sh.apply_wifi_drop();
+    assert_eq!(side, SideEffect::None);
+    assert_eq!(sh.wifi().phase(), WifiPhase::Result);
+    assert_eq!(sh.wifi().fail(), Some(WifiFail::Dropped));
+}
+
+#[test]
+fn saved_net_skips_ime_and_connects() {
+    use passport_core::wifi::SavedWifi;
+    let mut store = passport_core::api::MemoryStore::new();
+    SavedWifi::new("Home", "storedpw", false)
+        .unwrap()
+        .save(&mut store);
+    let mut sh = Shell::new();
+    sh.wifi_load_saved(&store);
+    sh.apply_command(parse_line("radio wifi").unwrap());
+    sh.apply_wifi_scan(&sample_nets());
+    // Home is index 0 (locked in the scan) — saved creds skip the IME.
+    assert_eq!(sh.wifi().nets()[sh.wifi().selected()].ssid.as_str(), "Home");
+    let out = sh.handle_event(ButtonEvent::Click(Key::Ok));
+    assert_eq!(out.side, SideEffect::WifiConnect);
+    assert_eq!(sh.wifi().phase(), WifiPhase::Connecting);
+    assert_eq!(sh.wifi_connect_pass(), "storedpw");
 }
 
 #[test]

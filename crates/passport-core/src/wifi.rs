@@ -1,7 +1,8 @@
-//! System Wi-Fi picker. Scan list + 3-key IME. No HAL types.
+//! System Wi-Fi picker. Scan list + 3-key IME + saved creds. No HAL types.
 
 use heapless::{String, Vec};
 
+use crate::api::Store;
 use crate::board::Key;
 use crate::ime::{Ime, ImeAction};
 use crate::input::ButtonEvent;
@@ -11,12 +12,24 @@ pub enum WifiAction {
     None,
     Scan,
     Connect,
+    Disconnect,
+    /// Clear saved creds; firmware also erases the KV record.
+    Forget,
 }
 
 pub const WIFI_MAX_NETS: usize = 16;
 pub const WIFI_VISIBLE: usize = 10;
 pub const WIFI_SSID_MAX: usize = 32;
 pub const WIFI_PASS_MAX: usize = 64;
+
+/// KV keys persisted by the firmware flash store.
+pub const WIFI_SSID_KEY: &[u8] = b"wifi.ssid";
+pub const WIFI_PASS_KEY: &[u8] = b"wifi.pass";
+pub const WIFI_OPEN_KEY: &[u8] = b"wifi.open";
+
+/// Bounded open-network auto-rejoin after a drop (avoid a retry storm when
+/// the AP is simply gone).
+pub const REJOIN_MAX: u8 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WifiPhase {
@@ -25,6 +38,82 @@ pub enum WifiPhase {
     Ime,
     Connecting,
     Result,
+}
+
+/// Why a join/association attempt ended. Firmware maps esp-radio errors here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WifiFail {
+    Timeout,
+    Auth,
+    NoAp,
+    Radio,
+    Dropped,
+}
+
+impl WifiFail {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            WifiFail::Timeout => "timeout",
+            WifiFail::Auth => "auth",
+            WifiFail::NoAp => "no-ap",
+            WifiFail::Radio => "radio",
+            WifiFail::Dropped => "dropped",
+        }
+    }
+}
+
+/// Saved credentials: one network only (4 KB KV page, one record).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavedWifi {
+    pub ssid: String<WIFI_SSID_MAX>,
+    pub pass: String<WIFI_PASS_MAX>,
+    pub open: bool,
+}
+
+impl SavedWifi {
+    pub fn new(ssid: &str, pass: &str, open: bool) -> Option<Self> {
+        if ssid.is_empty() {
+            return None;
+        }
+        let mut s = String::new();
+        s.push_str(ssid).ok()?;
+        let mut p = String::new();
+        p.push_str(pass).ok()?;
+        Some(Self {
+            ssid: s,
+            pass: p,
+            open,
+        })
+    }
+
+    pub fn load(store: &dyn Store) -> Option<Self> {
+        let mut ssid = [0u8; WIFI_SSID_MAX];
+        let n = store.get(WIFI_SSID_KEY, &mut ssid)?;
+        if n == 0 || n > WIFI_SSID_MAX {
+            return None;
+        }
+        let ssid = core::str::from_utf8(&ssid[..n]).ok()?;
+        let mut pass = [0u8; WIFI_PASS_MAX];
+        let pass_str = match store.get(WIFI_PASS_KEY, &mut pass) {
+            Some(m) if m <= WIFI_PASS_MAX => core::str::from_utf8(&pass[..m]).ok()?,
+            _ => "",
+        };
+        let mut open = [0u8; 1];
+        let open = store.get(WIFI_OPEN_KEY, &mut open) == Some(1) && open[0] == 1;
+        Self::new(ssid, pass_str, open)
+    }
+
+    pub fn save(&self, store: &mut dyn Store) {
+        let _ = store.put(WIFI_SSID_KEY, self.ssid.as_bytes());
+        let _ = store.put(WIFI_PASS_KEY, self.pass.as_bytes());
+        let _ = store.put(WIFI_OPEN_KEY, &[self.open as u8]);
+    }
+
+    pub fn erase(store: &mut dyn Store) {
+        let _ = store.put(WIFI_SSID_KEY, &[]);
+        let _ = store.put(WIFI_PASS_KEY, &[]);
+        let _ = store.put(WIFI_OPEN_KEY, &[]);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -49,6 +138,15 @@ impl WifiNet {
     }
 }
 
+/// A footer row appended after the scan list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WifiRow {
+    Net(usize),
+    Rescan,
+    Disconnect,
+    Forget,
+}
+
 #[derive(Clone, Debug)]
 pub struct WifiUi {
     phase: WifiPhase,
@@ -59,7 +157,11 @@ pub struct WifiUi {
     pending_pass: String<WIFI_PASS_MAX>,
     pending_open: bool,
     result_ok: bool,
+    fail: Option<WifiFail>,
     connected_ssid: String<WIFI_SSID_MAX>,
+    saved: Option<SavedWifi>,
+    /// Open-network rejoin attempts since the last successful connect.
+    rejoins: u8,
 }
 
 impl Default for WifiUi {
@@ -79,7 +181,10 @@ impl WifiUi {
             pending_pass: String::new(),
             pending_open: false,
             result_ok: false,
+            fail: None,
             connected_ssid: String::new(),
+            saved: None,
+            rejoins: 0,
         }
     }
 
@@ -103,6 +208,99 @@ impl WifiUi {
         self.result_ok
     }
 
+    /// Why the last join failed (or `Dropped` after a lost association).
+    pub fn fail(&self) -> Option<WifiFail> {
+        self.fail
+    }
+
+    pub fn saved(&self) -> Option<&SavedWifi> {
+        self.saved.as_ref()
+    }
+
+    /// Boot-time restore from the KV page.
+    pub fn load_saved(&mut self, store: &dyn Store) {
+        self.saved = SavedWifi::load(store);
+        self.rejoins = 0;
+    }
+
+    /// Persisted creds after a successful join / direct `wifi join`.
+    pub fn saved_pending(&self) -> Option<SavedWifi> {
+        SavedWifi::new(
+            self.pending_ssid.as_str(),
+            self.pending_pass.as_str(),
+            self.pending_open,
+        )
+    }
+
+    /// Commit `pending` as the saved entry. Firmware calls this once the KV
+    /// write is queued (the Store put itself is infallible in RAM).
+    pub fn commit_saved(&mut self, store: &mut dyn Store) {
+        if let Some(s) = self.saved_pending() {
+            s.save(store);
+            self.saved = Some(s);
+        }
+    }
+
+    /// `wifi join <ssid> [pass]` — skip scan/IME entirely.
+    pub fn join(&mut self, ssid: &str, pass: &str, open: bool) -> WifiAction {
+        if ssid.is_empty() || ssid.len() > WIFI_SSID_MAX || pass.len() > WIFI_PASS_MAX {
+            return WifiAction::None;
+        }
+        self.pending_ssid.clear();
+        let _ = self.pending_ssid.push_str(ssid);
+        self.pending_pass.clear();
+        let _ = self.pending_pass.push_str(pass);
+        self.pending_open = open;
+        self.rejoins = 0;
+        self.phase = WifiPhase::Connecting;
+        WifiAction::Connect
+    }
+
+    /// Association lost while connected. Clears the connected mark; for an
+    /// open saved network, returns `Connect` for a bounded auto-rejoin.
+    /// `rejoins` counts automatic rejoin attempts since the last user connect
+    /// so a flapping AP cannot loop forever.
+    pub fn note_drop(&mut self) -> WifiAction {
+        let was_connected = !self.connected_ssid.is_empty();
+        self.connected_ssid.clear();
+        if self.phase == WifiPhase::Connecting {
+            // Connect raced a drop — surface it as a failed join.
+            self.fail = Some(WifiFail::Dropped);
+            self.result_ok = false;
+            self.phase = WifiPhase::Result;
+            return WifiAction::None;
+        }
+        if was_connected {
+            self.fail = Some(WifiFail::Dropped);
+        }
+        if self.saved.as_ref().is_some_and(|s| s.open) && self.rejoins < REJOIN_MAX {
+            self.rejoins += 1;
+            if let Some(s) = self.saved.clone() {
+                self.pending_ssid = s.ssid;
+                self.pending_pass = s.pass;
+                self.pending_open = s.open;
+                self.phase = WifiPhase::Connecting;
+                return WifiAction::Connect;
+            }
+        }
+        WifiAction::None
+    }
+
+    /// User asked to drop the link but keep creds (console/menu row).
+    pub fn disconnect(&mut self) -> WifiAction {
+        self.connected_ssid.clear();
+        self.rejoins = REJOIN_MAX; // explicit drop: no auto-rejoin
+        WifiAction::Disconnect
+    }
+
+    /// Forget saved creds (RAM side; firmware erases KV + disconnects).
+    pub fn forget(&mut self) -> WifiAction {
+        self.saved = None;
+        self.connected_ssid.clear();
+        self.rejoins = REJOIN_MAX;
+        WifiAction::Forget
+    }
+
     pub fn pending_ssid(&self) -> &str {
         self.pending_ssid.as_str()
     }
@@ -119,13 +317,38 @@ impl WifiUi {
         self.connected_ssid.as_str()
     }
 
-    /// Nets plus a trailing `scan` row.
+    /// Nets, a `rescan` row, then `disconnect`+`forget` while associated
+    /// (or `forget` alone when only saved creds exist).
     pub fn row_count(&self) -> usize {
-        self.nets.len() + 1
+        self.nets.len() + 1 + self.extra_rows()
+    }
+
+    fn extra_rows(&self) -> usize {
+        if !self.connected_ssid.is_empty() {
+            2
+        } else if self.saved.is_some() {
+            1
+        } else {
+            0
+        }
+    }
+
+    pub fn row_kind(&self, idx: usize) -> Option<WifiRow> {
+        let n = self.nets.len();
+        if idx < n {
+            return Some(WifiRow::Net(idx));
+        }
+        match idx - n {
+            0 => Some(WifiRow::Rescan),
+            1 if !self.connected_ssid.is_empty() => Some(WifiRow::Disconnect),
+            1 if self.saved.is_some() => Some(WifiRow::Forget),
+            2 if !self.connected_ssid.is_empty() => Some(WifiRow::Forget),
+            _ => None,
+        }
     }
 
     pub fn row_is_scan(&self, idx: usize) -> bool {
-        idx == self.nets.len()
+        self.row_kind(idx) == Some(WifiRow::Rescan)
     }
 
     pub fn net_at(&self, idx: usize) -> Option<&WifiNet> {
@@ -154,6 +377,8 @@ impl WifiUi {
         self.pending_ssid.clear();
         self.pending_pass.clear();
         self.pending_open = false;
+        self.fail = None;
+        self.rejoins = 0;
     }
 
     pub fn apply_scan(&mut self, nets: &[WifiNet]) {
@@ -183,8 +408,9 @@ impl WifiUi {
         let _ = self.nets.push(net.clone());
     }
 
-    pub fn apply_result(&mut self, ok: bool) {
+    pub fn apply_result(&mut self, ok: bool, fail: Option<WifiFail>) {
         self.result_ok = ok;
+        self.fail = fail;
         self.phase = WifiPhase::Result;
         if ok {
             self.connected_ssid.clear();
@@ -231,18 +457,40 @@ impl WifiUi {
     }
 
     fn activate_list(&mut self) -> WifiAction {
-        if self.row_is_scan(self.sel) {
-            self.begin_scan();
-            return WifiAction::Scan;
+        match self.row_kind(self.sel) {
+            Some(WifiRow::Rescan) => {
+                self.begin_scan();
+                WifiAction::Scan
+            }
+            Some(WifiRow::Disconnect) => self.disconnect(),
+            Some(WifiRow::Forget) => self.forget(),
+            Some(WifiRow::Net(_)) => self.activate_net(),
+            None => WifiAction::None,
         }
+    }
+
+    fn activate_net(&mut self) -> WifiAction {
         let Some(net) = self.nets.get(self.sel) else {
             return WifiAction::None;
         };
-        self.pending_ssid.clear();
-        let _ = self.pending_ssid.push_str(net.ssid.as_str());
-        self.pending_open = net.open;
+        let ssid = net.ssid.clone();
+        let open = net.open;
+        self.rejoins = 0;
+        // A saved entry for this SSID means we already hold the password:
+        // skip the IME unless the scan says the network is open.
+        if let Some(saved) = &self.saved {
+            if saved.ssid == ssid && (!open || saved.open) {
+                self.pending_ssid = saved.ssid.clone();
+                self.pending_pass = saved.pass.clone();
+                self.pending_open = saved.open;
+                self.phase = WifiPhase::Connecting;
+                return WifiAction::Connect;
+            }
+        }
+        self.pending_ssid = ssid;
+        self.pending_open = open;
         self.pending_pass.clear();
-        if net.open {
+        if open {
             self.phase = WifiPhase::Connecting;
             WifiAction::Connect
         } else {

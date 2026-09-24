@@ -1,0 +1,1020 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>PassportOS — 低保真线框图</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    background: #f2f2f2; color: #111; padding: 24px;
+    font-size: 12px;
+  }
+  header.doc { max-width: 1280px; margin: 0 auto 20px; }
+  header.doc h1 { font-size: 18px; letter-spacing: 1px; }
+  header.doc p  { color: #444; margin-top: 6px; line-height: 1.6; }
+  .legend {
+    display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px;
+    padding: 10px 12px; border: 1px solid #999; background: #fff;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; color:#333; }
+  .sw { display:inline-block; width: 12px; height: 12px; border: 1px solid #666; }
+  .sw.sel { background: #c9c9c9; border: 2px solid #111; }
+  .sw.ph  { background: repeating-linear-gradient(45deg,#fff 0 2px,#ddd 2px 4px); }
+  .sw.dn  { background: #111; }
+
+  section { max-width: 1280px; margin: 0 auto 28px; }
+  section > h2 {
+    font-size: 14px; padding: 6px 10px; background: #111; color: #fff;
+    display: inline-block; letter-spacing: 1px;
+  }
+  section > p.sub { color: #555; margin: 8px 0 12px; line-height: 1.6; }
+  .row { display: flex; flex-wrap: wrap; gap: 18px; }
+
+  .shot {
+    width: 210px; background: #fff; border: 1px solid #aaa; padding: 10px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .shot.wide { width: 340px; }
+  .frame {
+    width: 188px; height: 250px; border: 2px solid #111; background: #fff;
+    position: relative; overflow: hidden; flex: none;
+    font-size: 7px; line-height: 1.2;
+  }
+  .frame.dark { background: #111; }
+  .meta h3 { font-size: 11px; margin-bottom: 4px; }
+  .meta .pos { color:#fff; background:#666; padding:0 4px; font-size:9px; }
+  .meta dl { font-size: 10px; color: #333; }
+  .meta dt { font-weight: bold; color:#000; margin-top:4px; }
+  .meta dd { padding-left: 2px; line-height: 1.5; }
+  .meta dd b { color:#000; }
+
+  /* ===== wireframe primitives (240×320 @ ~0.78 scale) ===== */
+  .sb {
+    position: absolute; top:0; left:0; right:0; height:16px;
+    border-bottom: 1px solid #999;
+  }
+  .sb .t   { position:absolute; left:9px;  top:4px; }
+  .sb .rad { position:absolute; left:50px; top:4px; color:#555; }
+  .sb .ws  { position:absolute; left:88px; top:6px; }
+  .sb .bat { position:absolute; right:20px; top:4px; }
+  .sb .bb  { position:absolute; right:8px; top:5px; width:11px; height:5px; border:1px solid #666; }
+  .sb .bb i{ display:block; height:3px; margin:0 0 0 1px; background:#888; width:70%; }
+  .sb .bolt{ position:absolute; right:8px;  top:3px; color:#000; }
+  .d { display:inline-block; width:4px; height:4px; border:1px solid #777; margin-right:2px; }
+  .d.on { background:#777; }
+
+  .isl {
+    position: absolute; left:12px; right:12px; height:56px; border:1px solid #777;
+    padding: 6px 8px;
+  }
+  .isl .ic { position:absolute; left:8px; top:12px; width:16px; height:16px; }
+  .isl .tt { position:absolute; left:32px; top:10px; font-size:11px; font-weight:bold; }
+  .isl .cp { position:absolute; left:32px; top:28px; color:#666; }
+  .isl .cv { position:absolute; right:8px;  top:22px; color:#666; }
+  .sel { background:#c9c9c9; border:2px solid #111 !important; }
+
+  .g {
+    position:absolute; left:12px; right:12px; border:1px solid #777;
+  }
+  .r {
+    height: 24px; border-bottom: 1px solid #bbb; position: relative;
+    padding: 8px 6px 0 30px;
+  }
+  .r:last-child { border-bottom: none; }
+  .r .ri { position:absolute; left:7px; top:5px; width:12px; height:12px; background:#bbb;
+           color:#fff; text-align:center; font-size:7px; line-height:12px; }
+  .r .cv { position:absolute; right:6px; top:8px; color:#666; }
+  .r .acc{ position:absolute; right:10px; top:8px; color:#555; }
+
+  /* menu rows (19px → ~15px) */
+  .mrow { height:15px; border-bottom:1px solid #bbb; padding:4px 6px 0 8px; position:relative; }
+  .mrow:last-child { border-bottom:none; }
+  .mrow .acc { position:absolute; right:8px; top:4px; color:#555; }
+
+  /* wifi list rows */
+  .wrow { height:17px; border-bottom:1px solid #bbb; padding:5px 6px 0 8px; position:relative; }
+  .wrow:last-child { border-bottom:none; }
+  .wrow .lk { position:absolute; right:26px; top:5px; color:#666; }
+  .bars { position:absolute; right:8px; top:5px; }
+  .bars i { display:inline-block; width:3px; background:#888; margin-left:1px; vertical-align:bottom; }
+  .bars i:nth-child(1){height:3px} .bars i:nth-child(2){height:5px} .bars i:nth-child(3){height:7px}
+  .bars.dim i { background:#ccc; }
+  .tag { color:#888; }
+
+  .msg {
+    position:absolute; left:12px; right:12px; top:23px; height:34px; border:1px solid #777;
+    padding-top:11px; text-align:center;
+  }
+  .ph {
+    border:1px solid #999;
+    background: repeating-linear-gradient(45deg,#fff 0 3px,#e4e4e4 3px 6px);
+  }
+  .txt { position:absolute; color:#333; }
+  .dim { color:#777; }
+  .err { color:#000; font-weight:bold; }
+
+  /* IME keyboard */
+  .kb { position:absolute; left:12px; right:12px; }
+  .kr { display:flex; gap:2px; margin-bottom:2px; }
+  .k  { flex:1; border:1px solid #888; height:15px; text-align:center; line-height:15px; color:#333; }
+  .k.sel { background:#c9c9c9; border:2px solid #111; line-height:13px; }
+  .fld { position:absolute; left:12px; right:12px; height:22px; border:1px solid #777;
+         padding:7px 6px 0 8px; }
+
+  /* tune needle */
+  .ndl-track { position:absolute; left:20px; right:20px; height:8px; border:1px solid #777; }
+  .ndl { position:absolute; top:-2px; width:4px; height:12px; background:#111; }
+
+  .note-card {
+    border:1px dashed #888; background:#fafafa; padding:8px; font-size:10px;
+    line-height:1.6; color:#333; min-height:250px; width:188px;
+  }
+  .note-card h4 { font-size:10px; margin-bottom:6px; border-bottom:1px solid #ccc; padding-bottom:3px; }
+  .note-card code { background:#eee; padding:0 2px; }
+
+  footer { max-width:1280px; margin:24px auto; color:#666; font-size:10px; }
+</style>
+</head>
+<body>
+
+<header class="doc">
+  <h1>PassportOS — 低保真线框图（240×320 / UP·DOWN·OK 三键）</h1>
+  <p>仅表达信息层级、核心文案、按键位置与页面状态，不做正式 UI。按真实使用顺序分组平铺。
+     硬件约束：ESP32-C3 / 8MB / 无 PSRAM；Wi-Fi、BLE、音频 DMA 互斥；屏幕 GRAM 当 framebuffer。</p>
+  <div class="legend">
+    <span><i class="sw sel"></i>当前焦点/选中行</span>
+    <span><i class="sw ph"></i>图片/内容占位块</span>
+    <span><i class="sw dn"></i>熄屏（背光 PWM 0）</span>
+    <span><i class="sw"></i>分组卡片/行</span>
+    <span>→ 表示操作后的去向编号</span>
+    <span>按键：<b>UP</b>/<b>DOWN</b>/<b>OK</b>（click / long=800ms）</span>
+  </div>
+</header>
+
+<!-- ============ A 开机与首次使用 ============ -->
+<section>
+  <h2>A · 开机 → 首次使用</h2>
+  <p class="sub">上电 → 开机动画（可跳过）→ Launcher 三岛主屏。首次使用无已存 Wi-Fi、时钟为默认值；
+     若 KV 里有已存凭据则后台自动 join（见 E7）。</p>
+  <div class="row">
+
+    <div class="shot">
+      <div class="frame">
+        <div class="ph" style="position:absolute;left:64px;top:86px;width:60px;height:40px;"></div>
+        <div class="txt" style="left:0;right:0;top:140px;text-align:center;">PassportOS</div>
+        <div class="txt dim" style="left:0;right:0;top:200px;text-align:center;">press any key</div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">01</span> 开机动画</h3>
+        <dl>
+          <dt>位置</dt><dd>流程起点（上电/复位）</dd>
+          <dt>操作</dt><dd>任意键 → 跳过动画</dd>
+          <dt>去向</dt><dd>约 1s 后自动 → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">00:00</span>
+          <span class="ws"><i class="d on"></i><i class="d"></i></span>
+          <span class="bat">--</span><span class="bb"><i style="width:0"></i></span></div>
+        <div class="isl sel" style="top:24px;"><div class="ic ph"></div>
+          <div class="tt">Play</div><div class="cp">Flap Stack Brick Boo</div><div class="cv">&gt;</div></div>
+        <div class="isl" style="top:88px;"><div class="ic ph"></div>
+          <div class="tt">Tools</div><div class="cp">Pulse Tap Tune</div><div class="cv">&gt;</div></div>
+        <div class="isl" style="top:152px;"><div class="ic ph"></div>
+          <div class="tt">System</div><div class="cp">wifi sleep about</div><div class="cv">&gt;</div></div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">02</span> Launcher 主屏 · 三岛（首次）</h3>
+        <dl>
+          <dt>位置</dt><dd>默认主屏；首次使用：时钟 00:00、电量 --、无已存网络</dd>
+          <dt>操作</dt><dd>UP/DN 选岛 · OK 进入组 · Long OK 回桌面</dd>
+          <dt>去向</dt><dd>OK → <b>04</b>；Long OK → <b>06</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="note-card">
+        <h4>02a · 非首次开机的差异（后台状态，无界面变化）</h4>
+        KV 页存有 <code>wifi.ssid/pass/open</code> → 后台直接 <code>connect_async</code>，
+        不弹 Wi-Fi 界面。成功后状态栏出现 <b>Wi-Fi</b> 标记，join 结果写回状态。
+        失败（auth/no-ap/timeout/radio）只留状态，不打扰主屏。<br><br>
+        入口：<code>SavedWifi::load</code> → <code>wifi.join()</code> → 固件 worker。
+      </div>
+      <div class="meta">
+        <h3><span class="pos">03</span> 已存网络自动重连</h3>
+        <dl>
+          <dt>位置</dt><dd>开机后台步骤，与 02 并行</dd>
+          <dt>去向</dt><dd>成功 → 状态栏 Wi-Fi；掉线 → <b>26</b></dd>
+        </dl>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ B 桌面与启动器 ============ -->
+<section>
+  <h2>B · 桌面与启动器</h2>
+  <p class="sub">Launcher（三岛/组）是浮层；桌面是两个工作区，每个最多 2 个 app tile。
+     组内 UP 到第一行或 Long OK 返回三岛。</p>
+  <div class="row">
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span>
+          <span class="ws"><i class="d on"></i><i class="d"></i></span>
+          <span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="g" style="top:24px;height:126px;">
+          <div class="r sel"><span class="ri">F</span>Flap<span class="cv">&gt;</span></div>
+          <div class="r"><span class="ri">K</span>Stack<span class="cv">&gt;</span></div>
+          <div class="r"><span class="ri">B</span>Brick<span class="cv">&gt;</span></div>
+          <div class="r"><span class="ri">O</span>Boo<span class="cv">&gt;</span></div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">04</span> 组视图 · Play</h3>
+        <dl>
+          <dt>位置</dt><dd>02 中 OK 进入某岛（Tools 同构：Pulse/Tap/Tune）</dd>
+          <dt>操作</dt><dd>UP/DN 选 app · OK 启动 · UP@首行 或 Long OK 回三岛</dd>
+          <dt>去向</dt><dd>OK → <b>05/07-13</b>；返回 → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span>
+          <span class="ws"><i class="d on"></i><i class="d"></i></span>
+          <span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="ph" style="position:absolute;left:12px;right:12px;top:30px;height:120px;">
+          <div class="txt dim" style="left:8px;top:8px;">pulse · ADC/mV 仪表</div>
+        </div>
+        <div class="ph" style="position:absolute;left:12px;right:12px;top:158px;height:60px;">
+          <div class="txt dim" style="left:8px;top:8px;">tile 2（可选）</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">05</span> 桌面 · 工作区 1</h3>
+        <dl>
+          <dt>位置</dt><dd>Launcher 关闭后；状态栏圆点指示工作区</dd>
+          <dt>操作</dt><dd>UP/DN click 切 tile 焦点 · OK → app 输入 · Long UP/DN 切工作区 · Long OK → Launcher</dd>
+          <dt>去向</dt><dd>Long UP → <b>06</b>；Long OK → <b>02</b>；进入游戏 → <b>09</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span>
+          <span class="ws"><i class="d"></i><i class="d on"></i></span>
+          <span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="ph" style="position:absolute;left:12px;right:12px;top:30px;height:188px;">
+          <div class="txt dim" style="left:8px;top:8px;">workspace 2 · tile</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">06</span> 桌面 · 工作区 2</h3>
+        <dl>
+          <dt>位置</dt><dd>第二个工作区（布局独立）</dd>
+          <dt>操作</dt><dd>同 05；游戏 focus 时 UP/DN 归游戏，不切工作区</dd>
+          <dt>去向</dt><dd>Long UP → <b>05</b>；Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span>
+          <span class="ws"><i class="d on"></i><i class="d"></i></span>
+          <span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="g" style="top:24px;height:98px;">
+          <div class="r sel"><span class="ri">F</span>flap<span class="cv">&gt;</span></div>
+          <div class="r"><span class="ri">B</span>brick<span class="cv">&gt;</span></div>
+          <div class="r"><span class="ri">O</span>boo<span class="cv">&gt;</span></div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">06a</span> Launcher 过滤列表</h3>
+        <dl>
+          <dt>位置</dt><dd>仅控制台 <code>filter &lt;前缀&gt;</code> 触发：Launcher 切扁平匹配列表（view 3）；<code>filter</code> 无参清空回三岛</dd>
+          <dt>操作</dt><dd>UP/DN 选项 · OK 启动 · Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ C 应用 ============ -->
+<section>
+  <h2>C · 应用画面</h2>
+  <p class="sub">App 以 tile 跑在工作区；占用麦克风/音频等独占资源的 app 在获得焦点时申请，失去焦点释放。</p>
+  <div class="row">
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="txt" style="left:0;right:0;top:40px;text-align:center;font-size:12px;"><b>A4</b></div>
+        <div class="txt dim" style="left:0;right:0;top:56px;text-align:center;">440 Hz</div>
+        <div class="ndl-track" style="top:96px;"><div class="ndl" style="left:52%;"></div></div>
+        <div class="txt" style="left:0;right:0;top:160px;text-align:center;">play a string</div>
+        <div class="txt dim" style="left:0;right:0;top:200px;text-align:center;">UP/DN string</div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">07</span> Tune 调音器（麦克风）</h3>
+        <dl>
+          <dt>位置</dt><dd>Tools 组 → tune；持麦采集 → I2S RX</dd>
+          <dt>内容</dt><dd>弦名 E2..E5（吉他/尤克/小提琴）· 目标 Hz · 指针 + 偏差 cents · <i>play a string / N Hz in tune / Nc sharp/flat</i></dd>
+          <dt>操作</dt><dd>UP/DN 换弦 · Long OK → 退出释放麦克风 → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="ph" style="position:absolute;left:12px;right:12px;top:30px;height:150px;">
+          <div class="txt dim" style="left:8px;top:8px;">boo · mic 声控游戏区</div>
+        </div>
+        <div class="g" style="bottom:12px;height:14px;">
+          <div class="txt dim" style="padding:3px 6px;">mic level ▓▓▓░░</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">08</span> Boo（麦克风吼叫检测）</h3>
+        <dl>
+          <dt>位置</dt><dd>Play 组 → boo；与 Tune 共用系统 mic 通路</dd>
+          <dt>内容</dt><dd>游戏区占位 + 底部 mic 电平条；喊声阈值触发事件</dd>
+          <dt>操作</dt><dd>对麦发声驱动 · Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="ph" style="position:absolute;left:12px;right:12px;top:30px;height:188px;">
+          <div class="txt dim" style="left:8px;top:8px;">flap · 小鸟+管道</div>
+          <div class="txt dim" style="left:8px;bottom:8px;">score 0</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">09</span> Flap</h3>
+        <dl>
+          <dt>位置</dt><dd>Play 组；20ms 帧 · 脏矩形重绘</dd>
+          <dt>操作</dt><dd>OK 拍翅（click/long 归 app）· Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="ph" style="position:absolute;left:12px;right:12px;top:30px;height:188px;">
+          <div class="txt dim" style="left:8px;top:8px;">stack · 叠方块</div>
+          <div class="txt dim" style="left:8px;bottom:8px;">score 0</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">10</span> Stack</h3>
+        <dl>
+          <dt>操作</dt><dd>OK 落块 · Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="ph" style="position:absolute;left:12px;right:12px;top:30px;height:188px;">
+          <div class="txt dim" style="left:8px;top:8px;">brick · 挡板+砖块</div>
+          <div class="txt dim" style="left:8px;bottom:8px;">score 0</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">11</span> Brick</h3>
+        <dl>
+          <dt>操作</dt><dd>UP/DN 按住移动挡板 · Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="ph" style="position:absolute;left:12px;right:12px;top:30px;height:188px;"></div>
+        <div class="g" style="top:80px;height:80px;background:#e8e8e8;">
+          <div class="txt" style="left:0;right:0;top:12px;text-align:center;">new best</div>
+          <div class="txt" style="left:0;right:0;top:36px;text-align:center;font-size:14px;"><b>7</b></div>
+          <div class="txt dim" style="left:0;right:0;top:60px;text-align:center;">best 7</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">11a</span> 游戏结束卡（Flap/Stack/Brick 共用）</h3>
+        <dl>
+          <dt>位置</dt><dd>游戏死亡态浮卡：<i>down</i> 或 <i>new best</i>（刷新纪录）+ 本局分 + best（KV 持久化）</dd>
+          <dt>操作</dt><dd>OK click → 重开本局 · Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="ph" style="position:absolute;left:12px;right:12px;top:30px;height:130px;">
+          <div class="txt dim" style="left:8px;top:8px;">pulse · 按键 mV 实时条</div>
+        </div>
+        <div class="g" style="top:170px;height:34px;">
+          <div class="txt dim" style="padding:4px 6px;">mv=3300 released</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">12</span> Pulse（ADC 可视化）</h3>
+        <dl>
+          <dt>位置</dt><dd>Tools 组；显示按键梯形电压/事件</dd>
+          <dt>操作</dt><dd>按 UP/DN/OK 看波形 · Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="txt dim" style="left:20px;top:42px;">Tap</div>
+        <div class="txt" style="left:20px;top:58px;">NTAG213</div>
+        <div class="g" style="top:80px;height:1px;"></div>
+        <div class="txt" style="left:20px;top:92px;">144B user mem</div>
+        <div class="txt dim" style="left:20px;top:108px;">MCU not wired</div>
+        <div class="txt" style="left:20px;top:132px;">phone reads NDEF</div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">13</span> Tap（NFC 说明页）</h3>
+        <dl>
+          <dt>位置</dt><dd>Tools 组；无 MCU 总线，仅信息页</dd>
+          <dt>操作</dt><dd>查看 · Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ D 系统菜单 ============ -->
+<section>
+  <h2>D · 系统菜单 / Keys / About</h2>
+  <p class="sub">入口：Launcher → System 岛，或桌面无焦点时 OK → System。五组卡片，UP/DN 移动，OK 触发。</p>
+  <div class="row">
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="rad">Wi-Fi</span>
+          <span class="ws"><i class="d on"></i><i class="d"></i></span>
+          <span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="g" style="top:20px;">
+          <div class="mrow">dimmer</div>
+          <div class="mrow">brighter</div>
+          <div class="mrow">appearance<span class="acc">dark</span></div>
+        </div>
+        <div class="g" style="top:71px;">
+          <div class="mrow">vol-<span class="acc">80</span></div>
+          <div class="mrow">vol+<span class="acc">80</span></div>
+          <div class="mrow sel">mute<span class="acc">off</span></div>
+        </div>
+        <div class="g" style="top:122px;">
+          <div class="mrow">radio off</div>
+          <div class="mrow">wifi<span class="acc">*</span></div>
+          <div class="mrow">bluetooth</div>
+        </div>
+        <div class="g" style="top:173px;">
+          <div class="mrow">sleep</div>
+          <div class="mrow">deep sleep</div>
+        </div>
+        <div class="g" style="top:209px;">
+          <div class="mrow">keys<span class="acc">&gt;</span></div>
+          <div class="mrow">about<span class="acc">&gt;</span></div>
+          <div class="mrow">home</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">14</span> 系统菜单（14 项）</h3>
+        <dl>
+          <dt>位置</dt><dd>System 岛 → OK</dd>
+          <dt>操作</dt><dd>UP/DN 移动 · OK 执行：<br>
+            dimmer/brighter → 亮度±10<br>
+            vol-/vol+/mute → <b>30</b><br>
+            radio off → <b>29</b> · wifi → <b>18</b> · bluetooth → <b>27</b><br>
+            sleep/deep sleep → <b>33</b><br>
+            keys → <b>15</b> · about → <b>16</b> · home → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="g" style="top:36px;height:130px;">
+          <div class="txt" style="left:12px;top:8px;">OK long   home<br><br>
+            UP/DN     move<br><br>
+            OK click  open<br><br>
+            UP long   desk 1<br><br>
+            DN long   desk 2<br><br>
+            system    settings<br><br>
+            phone tap NTAG213</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">15</span> Keys 速查页</h3>
+        <dl>
+          <dt>位置</dt><dd>系统菜单 → keys</dd>
+          <dt>操作</dt><dd>任意 click → 回菜单 · Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="g" style="top:36px;height:56px;">
+          <div class="txt" style="left:10px;top:8px;">PassportOS<br>FoloToy AI Passport<br>ESP32-C3  8MB</div>
+        </div>
+        <div class="g" style="top:104px;height:56px;">
+          <div class="txt" style="left:10px;top:8px;">OK long  home<br>UP/DN    move<br>OK       open</div>
+        </div>
+        <div class="g" style="top:172px;height:56px;">
+          <div class="txt" style="left:10px;top:8px;">NTAG213  144B<br>phone RF only<br>MCU has no bus</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">16</span> About · 产品页</h3>
+        <dl>
+          <dt>位置</dt><dd>系统菜单 → about</dd>
+          <dt>操作</dt><dd>UP/DN → <b>17</b> 存储页 · OK → 回菜单 · Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="g" style="top:36px;height:76px;">
+          <div class="txt" style="left:10px;top:10px;">Storage</div>
+          <div class="txt" style="left:10px;top:24px;">used  727 KB</div>
+          <div class="txt" style="left:10px;top:38px;">free  2.3 MB</div>
+          <div class="ph" style="position:absolute;left:10px;right:10px;top:58px;height:6px;background:#999;"></div>
+        </div>
+        <div class="g" style="top:124px;height:56px;">
+          <div class="txt" style="left:10px;top:8px;">flash   8 MB<br>factory 3 MB<br>kv      4 KB</div>
+        </div>
+        <div class="g" style="top:192px;height:34px;">
+          <div class="txt dim" style="left:10px;top:10px;">UP/DN  page<br>OK     back</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">17</span> About · 存储页</h3>
+        <dl>
+          <dt>位置</dt><dd>About UP/DN 翻页</dd>
+          <dt>内容</dt><dd>factory 镜像 used/free + 用量条 · flash/factory/kv 容量</dd>
+          <dt>操作</dt><dd>UP/DN → <b>16</b> · OK → 回菜单</dd>
+        </dl>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ E Wi-Fi ============ -->
+<section>
+  <h2>E · Wi-Fi 流程</h2>
+  <p class="sub">入口：系统菜单 wifi / 控制台 <code>radio wifi</code> / <code>wifi join &lt;ssid&gt; [pass]</code>。
+     阶段机：scan → list → (ime | join) → ok/fail → list 管理。</p>
+  <div class="row">
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="rad">Wi-Fi</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="msg">scan</div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">18</span> 扫描中（加载态）</h3>
+        <dl>
+          <dt>位置</dt><dd>进 wifi 即触发；后台 worker 异步扫描（≤8s）</dd>
+          <dt>去向</dt><dd>完成 → <b>19</b>；超时/0 结果 → <b>20</b>；radio 异常 → <b>24</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="rad">Wi-Fi</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="g" style="top:23px;">
+          <div class="wrow sel">HomeAP<span class="lk">*</span><span class="bars"><i></i><i></i><i></i></span></div>
+          <div class="wrow">CoffeeShop<span class="lk">#</span><span class="bars"><i></i><i></i><i class="d"></i></span></div>
+          <div class="wrow">Neighbor-5G<span class="lk">#</span><span class="bars dim"><i></i><i></i><i></i></span></div>
+          <div class="wrow">IoT-Open<span class="bars"><i></i><i></i><i class="d"></i></span></div>
+          <div class="wrow tag">rescan</div>
+          <div class="wrow tag">disconnect</div>
+          <div class="wrow tag">forget</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">19</span> 网络列表（RSSI 排序去重）</h3>
+        <dl>
+          <dt>标记</dt><dd><b>*</b>=已连接 · <b>#</b>=加密 · 右侧 RSSI 格 · 尾部 rescan/disconnect/forget（connect 时出现 disconnect+forget，仅有存证时出现 forget）</dd>
+          <dt>操作</dt><dd>UP/DN 选行 · OK：网络行→join（已存 ssid 跳过 IME）；开放网直连；rescan→<b>18</b>；disconnect→<b>25</b>；forget→<b>25</b> · Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="rad">Wi-Fi</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="g" style="top:23px;">
+          <div class="wrow sel tag">rescan</div>
+        </div>
+        <div class="txt dim" style="left:0;right:0;top:80px;text-align:center;">（无网络）</div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">20</span> 扫描结果为空（无数据态）</h3>
+        <dl>
+          <dt>位置</dt><dd>scan 超时 8s 或 0 个 AP</dd>
+          <dt>操作</dt><dd>OK@rescan → <b>18</b> 重扫 · Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="txt dim" style="left:12px;top:24px;">CoffeeShop</div>
+        <div class="fld" style="top:39px;">••••••<span style="border-left:1px solid #111">&nbsp;</span></div>
+        <div class="kb" style="top:66px;">
+          <div class="kr"><span class="k">q</span><span class="k">w</span><span class="k sel">e</span><span class="k">r</span><span class="k">t</span><span class="k">y</span><span class="k">u</span><span class="k">i</span><span class="k">o</span><span class="k">p</span></div>
+          <div class="kr"><span class="k">a</span><span class="k">s</span><span class="k">d</span><span class="k">f</span><span class="k">g</span><span class="k">h</span><span class="k">j</span><span class="k">k</span><span class="k">l</span></div>
+          <div class="kr"><span class="k">z</span><span class="k">x</span><span class="k">c</span><span class="k">v</span><span class="k">b</span><span class="k">n</span><span class="k">m</span></div>
+          <div class="kr"><span class="k">1</span><span class="k">2</span><span class="k">3</span><span class="k">4</span><span class="k">5</span><span class="k">6</span><span class="k">7</span><span class="k">8</span><span class="k">9</span><span class="k">0</span></div>
+          <div class="kr"><span class="k">-</span><span class="k">_</span><span class="k">.</span><span class="k">@</span><span class="k">/</span><span class="k">!</span><span class="k">?</span><span class="k">,</span></div>
+          <div class="kr"><span class="k">Aa</span><span class="k">&lt;</span><span class="k">_</span><span class="k">x</span><span class="k">go</span></div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">21</span> 密码输入（三键 IME）</h3>
+        <dl>
+          <dt>位置</dt><dd>19 选中加密网络 → IME；顶部 ssid，下方掩码输入框</dd>
+          <dt>操作</dt><dd>UP/DN 移光标 · OK 输入 · Aa 大小写 · &lt; 删除 · _ 空格 · x → 回 <b>19</b> · go → <b>22</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="rad">Wi-Fi</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="msg">join</div>
+        <div class="txt dim" style="left:0;right:0;top:64px;text-align:center;">CoffeeShop</div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">22</span> 连接中（≤15s）</h3>
+        <dl>
+          <dt>位置</dt><dd>go / 直连 / 开放网 OK 后；worker connect_async</dd>
+          <dt>去向</dt><dd>成功 → <b>23</b>；失败 → <b>24</b>；此时 disconnect → 中止回列表</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="rad">Wi-Fi</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="msg">ok</div>
+        <div class="txt dim" style="left:0;right:0;top:64px;text-align:center;">CoffeeShop · 已存 KV</div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">23</span> 连接成功</h3>
+        <dl>
+          <dt>位置</dt><dd>join 完成；凭据写入 KV（POSW），下次开机自动连（03）</dd>
+          <dt>操作</dt><dd>OK → 回 <b>19</b>（该行标 *）；Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="rad">Wi-Fi</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="msg err">fail auth</div>
+        <div class="txt dim" style="left:0;right:0;top:64px;text-align:center;">CoffeeShop</div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">24</span> 连接失败（分类原因）</h3>
+        <dl>
+          <dt>文案</dt><dd>fail <b>auth</b>（密码错/握手超时）· fail <b>no-ap</b>（找不到 AP）· fail <b>timeout</b>（15s 超时）· fail <b>radio</b>（射频/初始化异常）· fail <b>dropped</b>（连接中被踢）</dd>
+          <dt>操作</dt><dd>OK → 回 <b>19</b> 重试或改密码 · Long OK → <b>02</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="rad">Wi-Fi</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="g" style="top:23px;">
+          <div class="wrow">HomeAP<span class="lk">*</span><span class="bars"><i></i><i></i><i></i></span></div>
+          <div class="wrow tag">rescan</div>
+          <div class="wrow sel tag">disconnect</div>
+          <div class="wrow tag">forget</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">25</span> 已连接管理</h3>
+        <dl>
+          <dt>操作</dt><dd><b>disconnect</b> → 断开但保留凭据（列表无 *，仍留 forget 行）<br>
+            <b>forget</b> → 断开 + 擦除 KV + 清 RAM（forget 行消失）<br>
+            <b>rescan</b> → <b>18</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="note-card">
+        <h4>26 · 掉线与恢复（状态迁移，无专属屏）</h4>
+        关联丢失 → worker 发 <code>Disconnected</code> → 状态栏 Wi-Fi 标记消失、
+        wifi 状态记 <code>fail dropped</code>。<br><br>
+        已存<b>开放网络</b>：自动重连 ≤ <code>REJOIN_MAX=3</code> 次（后台静默，不走 UI）；
+        加密网/超上限：停留断线态，等用户回 <b>19</b> 手动重连。<br><br>
+        用户主动 disconnect/forget 不触发自动重连。
+      </div>
+      <div class="meta">
+        <h3><span class="pos">26</span> 掉线 → 有界自动重连</h3>
+        <dl>
+          <dt>去向</dt><dd>重连成功 → 23 等价状态；失败 → <b>24</b></dd>
+        </dl>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ F 蓝牙 ============ -->
+<section>
+  <h2>F · 蓝牙（BLE）</h2>
+  <p class="sub">入口：系统菜单 bluetooth / <code>radio ble</code>。可连接广播 <code>PassportOS</code> +
+     GATT Battery Service（0x180F / 电量 0x2A19，read+notify）。</p>
+  <div class="row">
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="rad">BT</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="g" style="top:122px;">
+          <div class="mrow">radio off</div>
+          <div class="mrow">wifi</div>
+          <div class="mrow sel">bluetooth<span class="acc">*</span></div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">27</span> BLE 广播中（可连接）</h3>
+        <dl>
+          <dt>位置</dt><dd>菜单 bluetooth → OK；状态栏 <b>BT</b>，菜单配件 *</dd>
+          <dt>行为</dt><dd>广播名 PassportOS；手机扫描可发现并可连接</dd>
+          <dt>去向</dt><dd>手机连上 → <b>28</b>；radio off / 开 Wi-Fi / 进 mic app → <b>29</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="rad">BT*</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="g" style="top:122px;">
+          <div class="mrow">radio off</div>
+          <div class="mrow">wifi</div>
+          <div class="mrow sel">bluetooth<span class="acc">on</span></div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">28</span> 已连接（中央设备在线）</h3>
+        <dl>
+          <dt>位置</dt><dd>手机接入后；状态栏 <b>BT*</b>，菜单配件 on</dd>
+          <dt>行为</dt><dd>对端可读/订阅电量（30s 推送一次 CW2017 实测 %）</dd>
+          <dt>去向</dt><dd>对端断开 → 自动回 <b>27</b> 重新广播；radio off → <b>29</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="g" style="top:122px;">
+          <div class="mrow sel">radio off<span class="acc">*</span></div>
+          <div class="mrow">wifi<span class="acc">&gt;</span></div>
+          <div class="mrow">bluetooth</div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">29</span> Radio Off</h3>
+        <dl>
+          <dt>位置</dt><dd>菜单 radio off / <code>radio off</code></dd>
+          <dt>行为</dt><dd>停 BLE 广播/连接 + Wi-Fi 断开；状态栏无标记</dd>
+          <dt>去向</dt><dd>wifi → <b>18</b> · bluetooth → <b>27</b></dd>
+        </dl>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ G 音频 ============ -->
+<section>
+  <h2>G · 音频 / 扬声器</h2>
+  <p class="sub">系统级音量：ES8311 DAC 寄存器 0x32，0–100 + 独立静音位。beep 为限时播放（800ms 自动停）。</p>
+  <div class="row">
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="g" style="top:71px;">
+          <div class="mrow">vol-<span class="acc">80</span></div>
+          <div class="mrow sel">vol+<span class="acc">80</span></div>
+          <div class="mrow">mute<span class="acc">off</span></div>
+        </div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">30</span> 音量 / 静音</h3>
+        <dl>
+          <dt>位置</dt><dd>系统菜单音频组；配件实时显示音量值/静音态</dd>
+          <dt>操作</dt><dd>vol± 步进 10 并写 DAC（同时解除静音）· mute 切换（unmute 恢复原音量）<br>控制台 <code>vol [0-100]</code> / <code>mute</code> 等价</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="note-card">
+        <h4>31 · 播放状态（无专属屏）</h4>
+        <code>audio beep</code> → I2S TX 播正弦 <b>800ms</b> 后自动停；
+        <code>audio stop</code> 立即停 TX/RX DMA。<br><br>
+        <code>audio rec</code> → RX 采集（调试）。<br><br>
+        麦克风 app（Tune/Boo）占用 I2S 时 beep 走静音填充——
+        资源互斥，见 <b>36</b>。
+      </div>
+      <div class="meta">
+        <h3><span class="pos">31</span> Beep / Rec / Stop</h3>
+        <dl>
+          <dt>去向</dt><dd>到时自动停 → 释放 Audio 资源</dd>
+        </dl>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ H 电源 ============ -->
+<section>
+  <h2>H · 待机 / 睡眠 / 充电</h2>
+  <p class="sub"> unplugged 30s 无按键 → 背光灭待机（非 RTC 睡眠）；唤醒键被吞掉不触发 UI。sleep/deep sleep 为 RTC 定时唤醒演示。</p>
+  <div class="row">
+
+    <div class="shot">
+      <div class="frame dark">
+        <div class="txt" style="left:0;right:0;top:110px;text-align:center;color:#555;">(背光灭)</div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">32</span> 空闲待机（息屏）</h3>
+        <dl>
+          <dt>位置</dt><dd>电池供电 30s 无操作自动进入；ADC 采样继续</dd>
+          <dt>操作</dt><dd>任意键 → 恢复亮度 + 吞掉该键（不触发 UI）<br>插 USB 充电 → 同样唤醒</dd>
+          <dt>去向</dt><dd>→ 进入前的页面（02/05/…）</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="note-card">
+        <h4>33 · sleep / deep sleep（RTC 演示路径）</h4>
+        <code>sleep</code> → light sleep，RTC 2s 唤醒回原页面。<br><br>
+        <code>deep sleep</code> → deep sleep，5s 后<b>整机重启</b> → 回到 <b>01</b> 开机动画。<br><br>
+        注意：与 32 的空闲待机是不同机制（一个是 RTC 睡，一个是背光 PWM0）。
+      </div>
+      <div class="meta">
+        <h3><span class="pos">33</span> 睡眠</h3>
+        <dl>
+          <dt>去向</dt><dd>light → 原页面 · deep → <b>01</b></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="bolt">⚡</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="isl" style="top:24px;"><div class="ic ph"></div>
+          <div class="tt">Play</div><div class="cp">Flap Stack Brick Boo</div><div class="cv">&gt;</div></div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">34</span> 充电中</h3>
+        <dl>
+          <dt>位置</dt><dd>任意界面；USB SOF 或 SOC 上升判定</dd>
+          <dt>表现</dt><dd>电池图标叠加闪电 · 解除/禁止空闲待机</dd>
+        </dl>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ I 异常与恢复 ============ -->
+<section>
+  <h2>I · 失败 / 无数据 / 异常恢复</h2>
+  <p class="sub">覆盖：权限边界（资源互斥）、加载超时、无数据、各失败分类、自恢复路径。</p>
+  <div class="row">
+
+    <div class="shot">
+      <div class="note-card">
+        <h4>35 · 权限边界 = 资源互斥（无弹窗设计）</h4>
+        本 OS 无权限对话框；Wi-Fi / BLE / 音频 DMA 同一时刻只能占一路，由系统仲裁：<br><br>
+        · 开 Wi-Fi（18）时 BLE 在广播 → 自动停 BLE<br>
+        · 开 BLE（27）时 Wi-Fi 已连 → 自动断开 Wi-Fi<br>
+        · 进 Tune/Boo（07/08）时 radio 开着 → 先 radio off 再开 I2S<br>
+        · mic 占用中播 beep → 静音填充（不出声）
+      </div>
+      <div class="meta">
+        <h3><span class="pos">35</span> 独占资源仲裁</h3>
+        <dl>
+          <dt>原则</dt><dd>新占用者胜；被挤掉的资源走正常停止路径，可再开</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="frame">
+        <div class="sb"><span class="t">12:30</span><span class="rad">Wi-Fi</span><span class="bat">80%</span><span class="bb"><i></i></span></div>
+        <div class="msg err">fail radio</div>
+      </div>
+      <div class="meta">
+        <h3><span class="pos">36</span> 射频初始化失败（降级）</h3>
+        <dl>
+          <dt>触发</dt><dd>wifi worker init 失败（内存不足等）</dd>
+          <dt>行为</dt><dd>worker 不死：后续 scan 回空列表（→20）、join 回 fail radio——用户可见可重试，不静默吞命令</dd>
+          <dt>恢复</dt><dd>界面层无感；等下次操作重试或重启</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="note-card">
+        <h4>37 · 麦克风链路自恢复（内部机制）</h4>
+        RX 用 <code>sig_loopback</code> 跟随 TX 时钟；TX 常喂（静音/PCM）防 underrun 停钟。<br><br>
+        看门狗：mic 开启后 500ms 无 PCM 字节 → 自动重启 DMA 读，
+        记 <code>[mic] rx stall #n</code>；关闭时打印累计 bytes/stalls。<br><br>
+        UI 表现：Tun​​e 显示无变化（hz 保持 0/上次值），恢复后继续出数。
+      </div>
+      <div class="meta">
+        <h3><span class="pos">37</span> I2S RX stall 看门狗</h3>
+        <dl>
+          <dt>表现</dt><dd>用户无感；日志可查 <code>[mic] rx stall</code></dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot">
+      <div class="note-card">
+        <h4>38 · 凭据/存储异常 → 回首次流程</h4>
+        KV 页 POSW 记录 CRC 校验失败 / 从未保存 / forget 后：<br>
+        → <code>wifi_saved=None</code>，无自动重连，Wi-Fi 界面无 forget 行，走 <b>18→19</b> 首次连接流程。<br><br>
+        时钟未设：KV 无 time → 状态栏显示默认时钟；<code>time HH:MM</code> 或菜单设置后写回 KV。
+      </div>
+      <div class="meta">
+        <h3><span class="pos">38</span> 无凭据 / KV 损坏</h3>
+        <dl>
+          <dt>去向</dt><dd>→ <b>18</b> 常规扫描连接</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="shot wide">
+      <div class="note-card" style="width:100%;min-height:250px;">
+        <h4>39 · USB 控制台（调试旁路，GPIO18/19）</h4>
+        <code>status</code> · <code>time [HH:MM]</code> · <code>apps</code> · <code>launcher</code> · <code>filter &lt;p&gt;</code> ·
+        <code>activate [name]</code> · <code>menu</code> · <code>keys</code> · <code>about</code> · <code>theme</code><br>
+        <code>key mv &lt;mV&gt; [ticks]</code> · <code>key up|down|ok click|long</code> · <code>workspace 0|1</code> ·
+        <code>brightness 0-100</code><br>
+        <code>radio wifi|ble|off</code> · <code>wifi join &lt;ssid&gt; [pass]</code> · <code>wifi off</code> ·
+        <code>wifi forget</code><br>
+        <code>vol [0-100]</code> · <code>mute</code> · <code>audio beep|rec|stop</code> · <code>mic</code> ·
+        <code>probe</code> · <code>nfc</code> · <code>sleep light|deep</code><br><br>
+        控制台注入的按键与实体键共用同一 mV 解码器；wifi/audio/radio 命令与菜单同源（同一 SideEffect）。
+      </div>
+      <div class="meta">
+        <h3><span class="pos">39</span> 控制台命令总览</h3>
+        <dl>
+          <dt>作用</dt><dd>自动化测试 + 无屏调试入口；与 GUI 状态完全一致</dd>
+        </dl>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<footer>
+  PassportOS wireframes · 依据 README.md / docs/APP.md / 已实现代码梳理 ·
+  黑白灰线框 + 占位块，仅表达信息层级与流程 · 未新增功能
+</footer>
+
+</body>
+</html>

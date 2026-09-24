@@ -28,4 +28,6 @@ heapless = { workspace = true }
 embedded-io-async = "0.6"
 embedded-hal = "1.0"
 nb = "1"
+# `#[gatt_server]` output stores the server in a StaticCell.
+static_cell = "2.1.0"
 trouble-host = { version = "0.7.0", features = ["default-packet-pool-mtu-255", "derive"] }

@@ -1431,6 +1431,7 @@ dependencies = [
  "heapless 0.8.0",
  "nb 1.1.0",
  "passport-core",
+ "static_cell",
  "trouble-host",
 ]
 

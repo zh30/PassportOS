@@ -5,6 +5,7 @@
 use crate::boo::BOO_APP_ID;
 use crate::brick::BRICK_APP_ID;
 use crate::flap::FLAP_APP_ID;
+use crate::menu::MenuAction;
 use crate::shell::{Overlay, Shell};
 use crate::stack::STACK_APP_ID;
 use crate::status::RadioMode;
@@ -33,6 +34,12 @@ pub struct FrameSig {
     pub clock_min: Option<u16>,
     pub wifi_phase: WifiPhase,
     pub wifi_sel: usize,
+    /// Wi-Fi list row count (nets + footer) — footer rows appear on connect.
+    pub wifi_rows_n: u8,
+    pub wifi_fail: u8,
+    pub vol: u8,
+    pub muted: bool,
+    pub ble_conn: bool,
     pub ime_idx: u8,
     pub ime_len: u8,
     pub ime_shift: bool,
@@ -58,6 +65,11 @@ impl FrameSig {
             clock_min: shell.status.clock.minutes_of_day(),
             wifi_phase: shell.wifi().phase(),
             wifi_sel: shell.wifi().selected(),
+            wifi_rows_n: shell.wifi().row_count().min(255) as u8,
+            wifi_fail: shell.wifi().fail().map(|f| f as u8).unwrap_or(255),
+            vol: shell.status.volume,
+            muted: shell.status.muted,
+            ble_conn: shell.status.ble_conn,
             ime_idx: shell.wifi().ime().cursor() as u8,
             ime_len: shell.wifi().ime().len() as u8,
             ime_shift: shell.wifi().ime().shift(),
@@ -182,6 +194,7 @@ impl PaintPlan {
         let status = p.soc != now.soc
             || p.charging != now.charging
             || p.radio != now.radio
+            || p.ble_conn != now.ble_conn
             || p.workspace != now.workspace
             || p.clock_min != now.clock_min;
         if now.overlay == Overlay::None && p.content_gen != now.content_gen {
@@ -232,7 +245,22 @@ impl PaintPlan {
                 menu_rows: Some((p.menu_sel, now.menu_sel)),
                 ..Self::default()
             },
+            // Volume/mute edits repaint the audio rows (accessory text).
+            Overlay::System if p.vol != now.vol || p.muted != now.muted => Self {
+                status,
+                menu_rows: Some((
+                    menu_row_of(MenuAction::VolumeInc),
+                    menu_row_of(MenuAction::MuteToggle),
+                )),
+                ..Self::default()
+            },
             Overlay::Wifi if p.wifi_phase != now.wifi_phase => Self::full(now),
+            // Footer rows appear/vanish on connect, disconnect and forget.
+            Overlay::Wifi if p.wifi_rows_n != now.wifi_rows_n || p.wifi_fail != now.wifi_fail => Self {
+                status,
+                wifi: true,
+                ..Self::default()
+            },
             Overlay::Wifi if now.wifi_phase == WifiPhase::List && p.wifi_sel != now.wifi_sel => {
                 Self {
                     status,
@@ -274,6 +302,14 @@ impl PaintPlan {
             _ => Self::default(),
         }
     }
+}
+
+/// Index of a system-menu row; 0 when absent (paint then no-ops harmlessly).
+fn menu_row_of(action: crate::menu::MenuAction) -> usize {
+    crate::menu::MENU_ITEMS
+        .iter()
+        .position(|i| i.action == action)
+        .unwrap_or(0)
 }
 
 fn is_live_game(id: u8) -> bool {

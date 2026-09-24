@@ -73,6 +73,21 @@ pub const START: &[(u8, u8)] = &[
     (0x45, 0x00),
 ];
 
+/// DAC volume register (0x32): 0x00 is the deepest attenuation (≈ mute),
+/// 0xBF ≈ 0 dB (the INIT value). Scale is 0.5 dB/LSB up to 0xBF.
+pub const REG_DAC_VOLUME: u8 = 0x32;
+pub const DAC_VOL_MAX: u8 = 0xBF;
+
+/// Map system volume 0..=100 (+mute) onto the DAC register. `0` or muted → 0x00.
+pub const fn dac_volume(vol: u8, muted: bool) -> u8 {
+    if muted || vol == 0 {
+        0x00
+    } else {
+        let v = if vol > 100 { 100 } else { vol };
+        (v as u16 * DAC_VOL_MAX as u16 / 100) as u8
+    }
+}
+
 pub fn last_write(reg: u8) -> Option<u8> {
     INIT.iter().rev().find(|(r, _)| *r == reg).map(|(_, v)| *v)
 }

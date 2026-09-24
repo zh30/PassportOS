@@ -6,6 +6,9 @@ use heapless::Vec;
 pub enum MenuAction {
     BrightnessDec,
     BrightnessInc,
+    VolumeDec,
+    VolumeInc,
+    MuteToggle,
     RadioOff,
     RadioWifi,
     RadioBle,
@@ -35,6 +38,18 @@ pub const MENU_ITEMS: &[MenuItem] = &[
     MenuItem {
         label: "appearance",
         action: MenuAction::ThemeToggle,
+    },
+    MenuItem {
+        label: "vol-",
+        action: MenuAction::VolumeDec,
+    },
+    MenuItem {
+        label: "vol+",
+        action: MenuAction::VolumeInc,
+    },
+    MenuItem {
+        label: "mute",
+        action: MenuAction::MuteToggle,
     },
     MenuItem {
         label: "radio off",

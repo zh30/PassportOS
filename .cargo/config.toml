@@ -1,9 +1,11 @@
 [target.riscv32imc-unknown-none-elf]
-runner = "espflash flash --monitor --flash-size 8mb"
+runner = "espflash flash --monitor --flash-size 8mb --flash-mode dio --flash-freq 40mhz"
 rustflags = [
     "-C", "link-arg=-Tlinkall.x",
-    "-C", "force-frame-pointers",
 ]
 
 [env]
 ESP_LOG = "info"
+# Display SPI is the per-frame hot path and must not fetch code from XIP
+# (also keeps it runnable while esp-storage erases/writes the KV page).
+ESP_HAL_CONFIG_PLACE_SPI_MASTER_DRIVER_IN_RAM = "true"

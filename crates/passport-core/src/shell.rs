@@ -17,7 +17,7 @@ use crate::radio::ExclusiveManager;
 use crate::status::{RadioMode, StatusBar};
 use crate::storage::{ABOUT_PAGE_COUNT, ABOUT_PAGE_PRODUCT, factory_free};
 use crate::theme::Theme;
-use crate::wifi::{WifiAction, WifiNet, WifiUi};
+use crate::wifi::{SavedWifi, WifiAction, WifiFail, WifiNet, WifiUi};
 
 const TICK_MS: u32 = 20;
 /// Unplugged idle before backlight-off standby. Not RTC `sleep light` / `sleep deep`.
@@ -38,12 +38,23 @@ pub enum SideEffect {
     None,
     WifiScan,
     WifiConnect,
+    /// Drop the association, keep saved creds.
+    WifiDisconnect,
+    /// Disconnect + erase the KV wifi record.
+    WifiForget,
     BleAdvertise,
     RadioOff,
     SleepLight,
     SleepDeep,
+    /// Timed beep; firmware stops the sine after `AudioBeep` ms itself.
     AudioBeep,
     AudioRec,
+    /// Silence I2S/codec output.
+    AudioStop,
+    /// ES8311 DAC volume write, 0..=100.
+    AudioVolume(u8),
+    /// ES8311 DAC mute flag; unmute restores `StatusBar::volume`.
+    AudioMute(bool),
     Probe,
     SetBrightness(u8),
     ClockSet,
@@ -134,6 +145,7 @@ pub struct Shell {
     mic: Mic,
     pitch: crate::pitch::PitchBuf,
     mic_hz: u16,
+    pitch_tick: u8,
 }
 
 impl Default for Shell {
@@ -167,6 +179,7 @@ impl Shell {
             mic: Mic::new(),
             pitch: crate::pitch::PitchBuf::new(),
             mic_hz: 0,
+            pitch_tick: 0,
         }
     }
 
@@ -272,6 +285,26 @@ impl Shell {
         &self.wifi
     }
 
+    pub fn wifi_mut(&mut self) -> &mut WifiUi {
+        &mut self.wifi
+    }
+
+    /// Boot restore: load saved creds from KV into the Wi-Fi UI state.
+    pub fn wifi_load_saved(&mut self, store: &dyn crate::api::Store) {
+        self.wifi.load_saved(store);
+    }
+
+    /// Saved entry, if any — firmware uses it for boot auto-join.
+    pub fn wifi_saved(&self) -> Option<&SavedWifi> {
+        self.wifi.saved()
+    }
+
+    /// Persist pending creds after a successful connect.
+    pub fn wifi_commit_saved(&mut self, store: &mut dyn crate::api::Store) {
+        self.wifi.commit_saved(store);
+        self.dirty = true;
+    }
+
     pub fn wifi_connect_ssid(&self) -> &str {
         self.wifi.pending_ssid()
     }
@@ -290,11 +323,29 @@ impl Shell {
         self.dirty = true;
     }
 
-    pub fn apply_wifi_result(&mut self, ok: bool) {
-        self.wifi.apply_result(ok);
+    pub fn apply_wifi_result(&mut self, ok: bool, fail: Option<WifiFail>) {
+        self.wifi.apply_result(ok, fail);
         self.dirty = true;
         if ok {
             self.status.radio = RadioMode::Wifi;
+        }
+    }
+
+    /// Firmware reports the association dropped (or a disconnect ack).
+    /// Returns `WifiConnect` when an open saved network should rejoin.
+    pub fn apply_wifi_drop(&mut self) -> SideEffect {
+        self.dirty = true;
+        match self.wifi.note_drop() {
+            WifiAction::Connect => SideEffect::WifiConnect,
+            _ => SideEffect::None,
+        }
+    }
+
+    /// BLE central connected/disconnected — status bar `ble` ↔ `ble*`.
+    pub fn set_ble_conn(&mut self, on: bool) {
+        if self.status.ble_conn != on {
+            self.status.ble_conn = on;
+            self.dirty = true;
         }
     }
 
@@ -375,10 +426,16 @@ impl Shell {
         &self.pitch
     }
 
-    /// Left-channel PCM from I2S. Tune searches near the selected string.
+    /// Stereo PCM from I2S. Auto-picks the live channel (ES8311 mic routing
+    /// is board-dependent); Tune searches near the selected string.
     pub fn feed_pcm(&mut self, bytes: &[u8]) {
-        self.pitch.push_pcm16_le_left(bytes);
-        if self.pitch.len() >= crate::pitch::PITCH_N / 2 {
+        self.pitch.push_pcm16_le_auto(bytes);
+        // AMDF over the full 70-900Hz window is the heaviest core routine;
+        // first eligible feed computes, then recompute every 4th (~20 ms).
+        self.pitch_tick = self.pitch_tick.wrapping_add(1);
+        if self.pitch.len() >= crate::pitch::PITCH_N / 2
+            && self.pitch_tick.wrapping_sub(1) % 4 == 0
+        {
             self.mic_hz = self.pitch.hz().unwrap_or(0);
         }
     }
@@ -636,6 +693,7 @@ impl Shell {
                 self.exclusive.release(crate::radio::Resource::Wifi);
                 self.exclusive.release(crate::radio::Resource::Ble);
                 self.status.radio = RadioMode::Off;
+                self.status.ble_conn = false;
                 out.side = SideEffect::RadioOff;
                 let _ = out.reply.push_str("radio=off");
             }
@@ -663,6 +721,59 @@ impl Shell {
                 let _ = self.exclusive.acquire(crate::radio::Resource::Audio);
                 out.side = SideEffect::AudioRec;
                 let _ = out.reply.push_str("audio rec");
+            }
+            Command::AudioStop => {
+                self.exclusive.release(crate::radio::Resource::Audio);
+                out.side = SideEffect::AudioStop;
+                let _ = out.reply.push_str("audio stop");
+            }
+            Command::Volume(None) => {
+                let _ = write!(
+                    out.reply,
+                    "vol={} mute={}",
+                    self.status.volume,
+                    if self.status.muted { "on" } else { "off" }
+                );
+            }
+            Command::Volume(Some(n)) => {
+                self.status.volume = n;
+                self.status.muted = false;
+                out.side = SideEffect::AudioVolume(n);
+                let _ = write!(out.reply, "vol={n}");
+            }
+            Command::MuteToggle => {
+                self.status.muted = !self.status.muted;
+                out.side = SideEffect::AudioMute(self.status.muted);
+                let _ = write!(
+                    out.reply,
+                    "mute {}",
+                    if self.status.muted { "on" } else { "off" }
+                );
+            }
+            Command::WifiJoin { ssid, pass } => {
+                let _ = self.exclusive.acquire(crate::radio::Resource::Wifi);
+                self.status.radio = RadioMode::Wifi;
+                let open = pass.is_empty();
+                match self.wifi.join(ssid.as_str(), pass.as_str(), open) {
+                    WifiAction::Connect => {
+                        self.dirty = true;
+                        out.side = SideEffect::WifiConnect;
+                        let _ = write!(out.reply, "wifi join {}", ssid.as_str());
+                    }
+                    _ => {
+                        let _ = out.reply.push_str("wifi join bad arg");
+                    }
+                }
+            }
+            Command::WifiDisconnect => {
+                let _ = self.wifi.disconnect();
+                out.side = SideEffect::WifiDisconnect;
+                let _ = out.reply.push_str("wifi disconnect");
+            }
+            Command::WifiForget => {
+                let _ = self.wifi.forget();
+                out.side = SideEffect::WifiForget;
+                let _ = out.reply.push_str("wifi forget");
             }
             Command::Mic => {
                 let _ = write!(
@@ -824,8 +935,23 @@ impl Shell {
                 self.status.brightness = (self.status.brightness + 10).min(100);
                 SideEffect::SetBrightness(self.status.brightness)
             }
+            MenuAction::VolumeDec => {
+                self.status.volume = self.status.volume.saturating_sub(10);
+                self.status.muted = false;
+                SideEffect::AudioVolume(self.status.volume)
+            }
+            MenuAction::VolumeInc => {
+                self.status.volume = (self.status.volume + 10).min(100);
+                self.status.muted = false;
+                SideEffect::AudioVolume(self.status.volume)
+            }
+            MenuAction::MuteToggle => {
+                self.status.muted = !self.status.muted;
+                SideEffect::AudioMute(self.status.muted)
+            }
             MenuAction::RadioOff => {
                 self.status.radio = RadioMode::Off;
+                self.status.ble_conn = false;
                 self.exclusive.release(crate::radio::Resource::Wifi);
                 self.exclusive.release(crate::radio::Resource::Ble);
                 SideEffect::RadioOff
@@ -886,6 +1012,8 @@ impl Shell {
                     WifiAction::None => SideEffect::None,
                     WifiAction::Scan => SideEffect::WifiScan,
                     WifiAction::Connect => SideEffect::WifiConnect,
+                    WifiAction::Disconnect => SideEffect::WifiDisconnect,
+                    WifiAction::Forget => SideEffect::WifiForget,
                 },
             },
         }
