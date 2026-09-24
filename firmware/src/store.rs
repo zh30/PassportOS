@@ -10,16 +10,27 @@ use passport_core::clock::TIME_KEY;
 use passport_core::factory_image_len;
 use passport_core::flap::BEST_KEY as FLAP_BEST;
 use passport_core::stack::BEST_KEY as STACK_BEST;
+use passport_core::wifi::{WIFI_OPEN_KEY, WIFI_PASS_KEY, WIFI_SSID_KEY};
 
 const MAGIC: &[u8; 4] = b"POS1";
 const MAGIC2: &[u8; 4] = b"POS2";
+/// Saved Wi-Fi entry record at offset 32 in the KV page.
+const MAGICW: &[u8; 4] = b"POSW";
+const WIFI_REC_OFF: u32 = 32;
+/// magic(4) ssid_len(1) pass_len(1) flags(1) crc(1) ssid(32) pass(64) pad → 108
+const WIFI_REC_LEN: usize = 108;
 
 #[repr(align(4))]
 struct Slot([u8; 16]);
 
+#[repr(align(4))]
+struct WifiRec([u8; WIFI_REC_LEN]);
+
 pub struct KvStore<'d> {
     ram: MemoryStore,
     flash: FlashStorage<'d>,
+    /// Wi-Fi key writes are batched; `flush` erases+writes the page once.
+    wifi_dirty: bool,
 }
 
 impl<'d> KvStore<'d> {
@@ -27,6 +38,7 @@ impl<'d> KvStore<'d> {
         let mut this = Self {
             ram: MemoryStore::new(),
             flash: FlashStorage::new(flash),
+            wifi_dirty: false,
         };
         this.load();
         this
@@ -99,6 +111,75 @@ impl<'d> KvStore<'d> {
                 }
             }
         }
+        let mut wrec = WifiRec([0; WIFI_REC_LEN]);
+        if self
+            .flash
+            .read_nor(FLASH_KV_OFFSET + WIFI_REC_OFF, &mut wrec.0)
+            .is_ok()
+            && &wrec.0[..4] == MAGICW
+        {
+            let slen = wrec.0[4] as usize;
+            let plen = wrec.0[5] as usize;
+            let flags = wrec.0[6];
+            let crc = wrec.0[7];
+            let mut sum = 0u8;
+            for b in &wrec.0[4..7] {
+                sum ^= *b;
+            }
+            for i in 0..slen.min(32) {
+                sum ^= wrec.0[8 + i];
+            }
+            for i in 0..plen.min(64) {
+                sum ^= wrec.0[40 + i];
+            }
+            if crc == sum && slen > 0 && slen <= 32 && plen <= 64 {
+                let _ = self.ram.put(WIFI_SSID_KEY, &wrec.0[8..8 + slen]);
+                let _ = self.ram.put(WIFI_PASS_KEY, &wrec.0[40..40 + plen]);
+                let _ = self.ram.put(WIFI_OPEN_KEY, &[flags & 1]);
+                println!(
+                    "[store] wifi ssid={}",
+                    core::str::from_utf8(&wrec.0[8..8 + slen]).unwrap_or("?")
+                );
+            } else {
+                println!("[store] wifi rec bad crc");
+            }
+        }
+    }
+
+    fn build_wifi_rec(&self) -> WifiRec {
+        let mut rec = WifiRec([0; WIFI_REC_LEN]);
+        rec.0[..4].copy_from_slice(MAGICW);
+        let mut ssid = [0u8; 32];
+        let slen = self
+            .ram
+            .get(WIFI_SSID_KEY, &mut ssid)
+            .unwrap_or(0)
+            .min(32);
+        let mut pass = [0u8; 64];
+        let plen = self
+            .ram
+            .get(WIFI_PASS_KEY, &mut pass)
+            .unwrap_or(0)
+            .min(64);
+        let mut open = [0u8; 1];
+        let open = self.ram.get(WIFI_OPEN_KEY, &mut open) == Some(1) && open[0] == 1;
+        rec.0[4] = slen as u8;
+        rec.0[5] = plen as u8;
+        rec.0[6] = open as u8;
+        rec.0[8..8 + slen].copy_from_slice(&ssid[..slen]);
+        rec.0[40..40 + plen].copy_from_slice(&pass[..plen]);
+        let mut sum = 0u8;
+        for b in &rec.0[4..7] {
+            sum ^= *b;
+        }
+        for i in 0..slen {
+            sum ^= rec.0[8 + i];
+        }
+        for i in 0..plen {
+            sum ^= rec.0[40 + i];
+        }
+        rec.0[7] = sum;
+        rec
     }
 
     fn persist_slot(&mut self) {
@@ -151,7 +232,24 @@ impl<'d> KvStore<'d> {
             println!("[store] write2 fail");
             return;
         }
+        let wrec = self.build_wifi_rec();
+        if self
+            .flash
+            .write_nor(FLASH_KV_OFFSET + WIFI_REC_OFF, &wrec.0)
+            .is_err()
+        {
+            println!("[store] write wifi fail");
+            return;
+        }
         println!("[store] saved");
+    }
+
+    /// Persist deferred Wi-Fi key writes in one page erase+write cycle.
+    pub fn flush(&mut self) {
+        if self.wifi_dirty {
+            self.wifi_dirty = false;
+            self.persist_slot();
+        }
     }
 }
 
@@ -161,18 +259,23 @@ impl Store for KvStore<'_> {
     }
 
     fn put(&mut self, key: &[u8], val: &[u8]) -> Result<(), ApiError> {
-        let mut old = [0u8; 2];
-        let flash_key = key == FLAP_BEST
+        let wifi_key = key == WIFI_SSID_KEY || key == WIFI_PASS_KEY || key == WIFI_OPEN_KEY;
+        let flash_key = wifi_key
+            || key == FLAP_BEST
             || key == TIME_KEY
             || key == STACK_BEST
             || key == BRICK_BEST
             || key == BOO_BEST;
+        let mut old = [0u8; 64];
         let unchanged = flash_key
-            && val.len() >= 2
-            && self.ram.get(key, &mut old) == Some(2)
-            && old.as_slice() == &val[..2];
+            && self
+                .ram
+                .get(key, &mut old)
+                .is_some_and(|n| old[..n] == *val);
         self.ram.put(key, val)?;
-        if flash_key && val.len() >= 2 && !unchanged {
+        if wifi_key && !unchanged {
+            self.wifi_dirty = true;
+        } else if flash_key && !unchanged {
             self.persist_slot();
         }
         Ok(())

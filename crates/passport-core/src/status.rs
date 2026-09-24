@@ -29,6 +29,12 @@ pub struct StatusBar {
     /// USB-C 5 V present (SOF on the Serial/JTAG bus) or SOC rising.
     pub charging: bool,
     pub radio: RadioMode,
+    /// A BLE central is connected right now (advertising alone is not enough).
+    pub ble_conn: bool,
+    /// Speaker output level 0..=100 applied to the ES8311 DAC.
+    pub volume: u8,
+    /// DAC muted. Kept separately so unmute restores `volume`.
+    pub muted: bool,
     pub workspace: u8,
     pub focused: String<16>,
     pub brightness: u8,
@@ -51,6 +57,9 @@ impl StatusBar {
             battery_mv: None,
             charging: false,
             radio: RadioMode::Off,
+            ble_conn: false,
+            volume: 80,
+            muted: false,
             workspace: 0,
             focused,
             brightness: 80,
@@ -78,6 +87,14 @@ impl StatusBar {
             self.focused.as_str(),
             self.brightness
         );
+        if self.ble_conn {
+            let _ = s.push_str(" ble-conn");
+        }
+        if self.muted {
+            let _ = s.push_str(" vol=mute");
+        } else {
+            let _ = write!(s, " vol={}", self.volume);
+        }
         if !self.overlay.is_empty() {
             let _ = write!(s, " overlay={}", self.overlay.as_str());
         }
@@ -110,12 +127,18 @@ impl StatusBar {
             }
         };
         let time = self.clock.format_hm();
+        // "ble*" marks a live central connection, "ble" is advertising only.
+        let radio = if self.radio == RadioMode::Ble && self.ble_conn {
+            "ble*"
+        } else {
+            self.radio.as_str()
+        };
         let _ = write!(
             s,
             "{time} {bat} {radio} ws{ws} {app}",
             time = time.as_str(),
             bat = bat.as_str(),
-            radio = self.radio.as_str(),
+            radio = radio,
             ws = self.workspace + 1,
             app = self.focused.as_str()
         );

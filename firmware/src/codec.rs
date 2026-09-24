@@ -32,6 +32,19 @@ pub fn es8311_read<I: I2c>(i2c: &mut I, reg: u8) -> Option<u8> {
         .map(|_| b[0])
 }
 
+pub fn es8311_write<I: I2c>(i2c: &mut I, reg: u8, val: u8) -> Result<(), I::Error> {
+    i2c.write(I2C_ES8311_ADDR, &[reg, val])
+}
+
+/// Speaker level: system volume 0..=100 + mute → DAC register 0x32.
+pub fn es8311_set_volume<I: I2c>(i2c: &mut I, vol: u8, muted: bool) -> Result<(), I::Error> {
+    es8311_write(
+        i2c,
+        es8311::REG_DAC_VOLUME,
+        es8311::dac_volume(vol, muted),
+    )
+}
+
 pub fn cw2017_wake<I: I2c>(i2c: &mut I) -> Result<(), I::Error> {
     i2c.write(I2C_CW2017_ADDR, &[0x08, 0x00]) // CONFIG = normal
 }

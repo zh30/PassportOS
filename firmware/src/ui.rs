@@ -15,7 +15,7 @@ use passport_core::shell::{Overlay, Shell};
 use passport_core::status::RadioMode;
 use passport_core::storage::{ABOUT_PAGE_STORAGE, factory_total, format_size, used_bar_width};
 use passport_core::theme::Palette;
-use passport_core::wifi::{WIFI_VISIBLE, WifiPhase};
+use passport_core::wifi::{WIFI_VISIBLE, WifiPhase, WifiRow};
 use passport_core::{
     ISLAND_ICON, ISLAND_PAD, LAUNCHER_CARD_W, LAUNCHER_ROW_H, LAUNCHER_Y, LauncherGroup,
     display_name, island_caption, island_caption_y, island_card_h, island_card_y, island_chevron_x,
@@ -29,16 +29,17 @@ use crate::st7789::{HEIGHT, St7789, WIDTH};
 
 const INSET: u16 = 16;
 const GROUP_W: u16 = LAUNCHER_CARD_W;
-const MENU_Y0: u16 = 30;
-const MENU_ROW: u16 = 22;
-const MENU_GAP: u16 = 8;
+// 14 menu rows on a 320px panel: 19px rows + 5px gaps land at y=312.
+const MENU_Y0: u16 = 26;
+const MENU_ROW: u16 = 19;
+const MENU_GAP: u16 = 5;
 const ICON: u16 = 16;
 const FONT_W: u16 = 6;
 
 /// Boot / dark page fill. Same as [`Palette::DARK`].bg — proven on this panel.
 pub const COL_BG: u16 = 0x10A2;
 
-const MENU_GROUPS: &[(usize, usize)] = &[(0, 3), (3, 3), (6, 2), (8, 3)];
+const MENU_GROUPS: &[(usize, usize)] = &[(0, 3), (3, 3), (6, 3), (9, 2), (11, 3)];
 const WIFI_Y0: u16 = 30;
 const WIFI_ROW: u16 = 22;
 const IME_SSID_Y: u16 = 30;
@@ -190,6 +191,7 @@ where
     let radio = match shell.status.radio {
         RadioMode::Off => "",
         RadioMode::Wifi => "Wi-Fi",
+        RadioMode::Ble if shell.status.ble_conn => "BT*",
         RadioMode::Ble => "BT",
     };
     if !radio.is_empty() {
@@ -542,13 +544,13 @@ where
     if !acc.is_empty() {
         let aw = (acc.len() as u16).saturating_mul(FONT_W);
         let acc_x = INSET + GROUP_W - 12 - aw;
-        draw_text_fit(lcd, acc_x, y + 7, acc, p.secondary, bg, card_text_end(), 1)?;
+        draw_text_fit(lcd, acc_x, y + 6, acc.as_str(), p.secondary, bg, card_text_end(), 1)?;
         label_end = acc_x.saturating_sub(6);
     }
     draw_text_fit(
         lcd,
         INSET + 12,
-        y + 7,
+        y + 6,
         item.label,
         p.label,
         bg,
@@ -558,16 +560,39 @@ where
     Ok(())
 }
 
-fn accessory(shell: &Shell, action: MenuAction) -> &'static str {
+fn accessory(shell: &Shell, action: MenuAction) -> heapless::String<8> {
+    let mut s = heapless::String::<8>::new();
     match action {
-        MenuAction::ThemeToggle => shell.theme().as_str(),
-        MenuAction::RadioOff if shell.status.radio == RadioMode::Off => "*",
-        MenuAction::RadioWifi if shell.status.radio == RadioMode::Wifi => "*",
-        MenuAction::RadioWifi => ">",
-        MenuAction::RadioBle if shell.status.radio == RadioMode::Ble => "*",
-        MenuAction::Keys | MenuAction::About => ">",
-        _ => "",
+        MenuAction::ThemeToggle => {
+            let _ = s.push_str(shell.theme().as_str());
+        }
+        MenuAction::VolumeDec | MenuAction::VolumeInc => {
+            let _ = write!(s, "{}", shell.status.volume);
+        }
+        MenuAction::MuteToggle => {
+            let _ = s.push_str(if shell.status.muted { "on" } else { "off" });
+        }
+        MenuAction::RadioOff if shell.status.radio == RadioMode::Off => {
+            let _ = s.push_str("*");
+        }
+        MenuAction::RadioWifi if shell.status.radio == RadioMode::Wifi => {
+            let _ = s.push_str("*");
+        }
+        MenuAction::RadioWifi => {
+            let _ = s.push_str(">");
+        }
+        MenuAction::RadioBle if shell.status.ble_conn => {
+            let _ = s.push_str("on");
+        }
+        MenuAction::RadioBle if shell.status.radio == RadioMode::Ble => {
+            let _ = s.push_str("*");
+        }
+        MenuAction::Keys | MenuAction::About => {
+            let _ = s.push_str(">");
+        }
+        _ => {}
     }
+    s
 }
 
 fn paint_keys_body<LCD, E>(lcd: &mut LCD, p: Palette) -> Result<(), E>
@@ -721,12 +746,16 @@ where
         WifiPhase::Scan => paint_wifi_msg(lcd, p, "scan"),
         WifiPhase::Connecting => paint_wifi_msg(lcd, p, "join"),
         WifiPhase::Result => {
-            let msg = if shell.wifi().result_ok() {
-                "ok"
+            let mut msg = heapless::String::<16>::new();
+            if shell.wifi().result_ok() {
+                let _ = msg.push_str("ok");
             } else {
-                "fail"
-            };
-            paint_wifi_msg(lcd, p, msg)
+                let _ = msg.push_str("fail ");
+                if let Some(f) = shell.wifi().fail() {
+                    let _ = msg.push_str(f.as_str());
+                }
+            }
+            paint_wifi_msg(lcd, p, msg.as_str())
         }
         WifiPhase::Ime => paint_ime_body(lcd, shell, p),
         WifiPhase::List => paint_wifi_list(lcd, shell, p),
@@ -789,39 +818,70 @@ where
     let focused = i == wifi.selected();
     let bg = if focused { p.grouped_sel } else { p.grouped };
     lcd.fill_rect(INSET, y, GROUP_W, WIFI_ROW, bg)?;
-    if wifi.row_is_scan(i) {
-        draw_text_fit(
-            lcd,
-            INSET + 12,
-            y + 7,
-            "scan",
-            p.accent,
-            bg,
-            card_text_end(),
-            1,
-        )?;
-        return Ok(());
-    }
-    if let Some(net) = wifi.net_at(i) {
-        let ssid_end = if net.open {
-            INSET + GROUP_W - 26
-        } else {
-            INSET + GROUP_W - 40
-        };
-        draw_text_fit(
-            lcd,
-            INSET + 12,
-            y + 7,
-            net.ssid.as_str(),
-            p.label,
-            bg,
-            ssid_end,
-            1,
-        )?;
-        if !net.open {
-            lcd.draw_text(INSET + GROUP_W - 36, y + 7, "#", p.secondary, bg)?;
+    match wifi.row_kind(i) {
+        Some(WifiRow::Rescan) => {
+            draw_text_fit(
+                lcd,
+                INSET + 12,
+                y + 7,
+                "rescan",
+                p.accent,
+                bg,
+                card_text_end(),
+                1,
+            )?;
         }
-        paint_rssi(lcd, INSET + GROUP_W - 22, y + 6, net.rssi, p.accent, bg)?;
+        Some(WifiRow::Disconnect) => {
+            draw_text_fit(
+                lcd,
+                INSET + 12,
+                y + 7,
+                "disconnect",
+                p.low,
+                bg,
+                card_text_end(),
+                1,
+            )?;
+        }
+        Some(WifiRow::Forget) => {
+            draw_text_fit(
+                lcd,
+                INSET + 12,
+                y + 7,
+                "forget",
+                p.low,
+                bg,
+                card_text_end(),
+                1,
+            )?;
+        }
+        Some(WifiRow::Net(_)) => {
+            if let Some(net) = wifi.net_at(i) {
+                let joined = net.ssid.as_str() == wifi.connected_ssid();
+                let ssid_end = if net.open || joined {
+                    INSET + GROUP_W - 26
+                } else {
+                    INSET + GROUP_W - 40
+                };
+                draw_text_fit(
+                    lcd,
+                    INSET + 12,
+                    y + 7,
+                    net.ssid.as_str(),
+                    p.label,
+                    bg,
+                    ssid_end,
+                    1,
+                )?;
+                if joined {
+                    lcd.draw_text(INSET + GROUP_W - 36, y + 7, "*", p.ok, bg)?;
+                } else if !net.open {
+                    lcd.draw_text(INSET + GROUP_W - 36, y + 7, "#", p.secondary, bg)?;
+                }
+                paint_rssi(lcd, INSET + GROUP_W - 22, y + 6, net.rssi, p.accent, bg)?;
+            }
+        }
+        None => {}
     }
     Ok(())
 }

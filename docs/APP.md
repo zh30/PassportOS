@@ -23,8 +23,8 @@ All constants live in `crates/passport-core/src/board.rs`. Do not duplicate them
 | I2S0 | MCLK **GPIO6**, BCLK **GPIO5**, WS **GPIO3**, DOUT **GPIO2**, DIN **GPIO4** | 16-bit stereo, 16 kHz, Philips I2S, MCU master, codec slave. Stream PCM; do not allocate a 96 KB capture buffer. |
 | CW2017 fuel gauge | I2C **0x63** | Optional. Soft-fail if the chip NACKs. Charging bolt = USB-C SOF (host on the bus) or SOC rising. |
 | USB Serial/JTAG | **GPIO18 / GPIO19** | Native ESP32-C3 USB. Console + flash. |
-| Wi-Fi | 2.4 GHz STA scan + connect | System **wifi**: pick an AP. Open nets join immediately; locked nets open the 3-key English IME. |
-| BLE | non-connectable advertising `PassportOS` | On demand. ESP32-C3 has **no Bluetooth Classic**. |
+| Wi-Fi | 2.4 GHz STA scan + connect + manage | System **wifi**: pick an AP (open nets join immediately; locked nets open the 3-key English IME) plus `rescan` / `disconnect` / `forget` rows. Joins persist to the KV page (`wifi.ssid/pass/open`, POSW record) and auto-join at boot; drops report a reason and a saved open net rejoins at most `REJOIN_MAX=3` times. |
+| BLE | connectable advertising `PassportOS` + GATT Battery service | On demand (`radio ble` / `radio off`). Centrals can read + subscribe to Battery Level (0x2A19). `BT*` on the status bar while a central is connected. ESP32-C3 has **no Bluetooth Classic**. |
 | Light / deep sleep | RTC timer wake | Deep sleep restarts the application. Unplugged **idle standby** (30 s, no keys) is only backlight PWM 0 — not this path. Any key restores brightness and is swallowed so it does not also fire UI. Charging (USB SOF / SOC-up) inhibits blanking. |
 
 ### NFC (NTAG213) — on the card, not on the MCU
@@ -127,7 +127,7 @@ skip a tap.
 | Workspace 2 | **DOWN long** (not while a game is focused) |
 | System menu | launcher item `system` |
 | Keys / About | system menu items. About: UP/DOWN flips product copy ↔ factory used/free. OK back. |
-| Wi-Fi | system **wifi** — UP/DN pick AP, OK join. Locked: IME (UP/DN move, OK type, **go** submit, **x** back). Open nets skip the IME. |
+| Wi-Fi | system **wifi** — UP/DN pick AP, OK join. Locked: IME (UP/DN move, OK type, **go** submit, **x** back). Open nets skip the IME. Footer rows: `rescan`, `disconnect`, `forget`. Saved net auto-joins at boot; `*` marks the joined AP. |
 | Light / Dark | system menu **appearance** |
 
 No pointer, no Super-key chords, no overlapping windows.
@@ -161,9 +161,12 @@ Long OK is home. Bests are stored in the 4 KB KV page at `0x350000` (not
 | `key up\|down\|ok click\|long` | Synthesized via typical 0 / 300 / 595 / 3300 mV |
 | `workspace 0\|1` | Switch workspace |
 | `brightness 0-100` | PWM backlight |
-| `radio wifi\|ble\|off` | Wi-Fi overlay (scan/pick/IME/join) / BLE advertise / radio off |
+| `radio wifi\|ble\|off` | Wi-Fi overlay (scan/pick/IME/join) / connectable BLE / radio off |
+| `wifi join <ssid> [pass]` | Direct join (open net when no pass) |
+| `wifi off` / `wifi forget` | Drop the link (keep creds) / erase saved creds + drop |
 | `sleep light\|deep` | RTC-wake light 2 s / deep 5 s |
-| `audio beep\|rec` | Playback / raw I2S record (debug) |
+| `audio beep\|rec\|stop` | Timed beep / raw I2S record (debug) / silence I2S |
+| `vol [0-100]` / `mute` | Speaker volume (ES8311 DAC) / mute toggle |
 | `mic` | Last system mic level and shout/peak thresholds |
 | `probe` | I2C probe `0x18` and `0x63` |
 | `keys` / `about` / `menu` / `help` | Cheatsheet / about / system menu / help |

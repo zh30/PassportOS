@@ -34,9 +34,11 @@ pub const PIN_I2S_BCLK: u8 = 5;
 pub const PIN_I2S_WS: u8 = 3;
 pub const PIN_I2S_DOUT: u8 = 2;
 pub const PIN_I2S_DIN: u8 = 4;
-/// RX only has DIN; BCLK/WS are on TX. C3 `sig_loopback` stalls RX DMA (one
-/// pop then silence). Keep false until pad-level clock share works.
-pub const I2S_RX_LOOPBACK_TX: bool = false;
+/// RX only has DIN; BCLK/WS are on TX. `sig_loopback` makes RX slave onto the
+/// TX clock domain — required for the codec's SDOUT to be sampled in sync.
+/// The earlier "RX stall" was TX underrun stopping the shared clock: firmware
+/// keeps TX fed (silence or PCM) whenever RX is live, plus a watchdog.
+pub const I2S_RX_LOOPBACK_TX: bool = true;
 /// USB Serial/JTAG D- / D+ (reserved; do not reassign as GPIO).
 pub const PIN_USB_DM: u8 = 18;
 pub const PIN_USB_DP: u8 = 19;

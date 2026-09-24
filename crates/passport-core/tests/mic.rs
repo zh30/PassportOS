@@ -35,8 +35,8 @@ fn es8311_init_turns_adc_clocks_on() {
     assert_eq!(es8311::last_write(0x02), Some(0x20), "pre_div=2 for 256×fs");
     assert_eq!(es8311::last_write(0x07), Some(0x00), "lrck_h=0 not 0x01");
     assert!(
-        !passport_core::board::I2S_RX_LOOPBACK_TX,
-        "loopback stalled RX; retest pcm>0 before flipping"
+        passport_core::board::I2S_RX_LOOPBACK_TX,
+        "RX must slave onto TX clocks (sig_loopback) — the codec emits SDOUT on the TX BCLK/WS domain; firmware keeps TX fed so the shared clock never underruns"
     );
     assert!(
         !adc_clocks_on(0x30),
@@ -104,6 +104,29 @@ fn feed_pcm_reaches_tune_listen() {
         "A4 via feed_pcm cents {}",
         w.cents()
     );
+}
+
+#[test]
+fn feed_pcm_auto_picks_live_channel() {
+    // Mic routed to the RIGHT channel (L silent): auto-select must still tune.
+    let mut sh = Shell::new();
+    let mut pcm = Vec::new();
+    for i in 0..PITCH_N {
+        let t = i as f32 / PITCH_RATE as f32;
+        let s = ((core::f32::consts::TAU * 440.0 * t).sin() * 18000.0) as i16;
+        pcm.extend_from_slice(&0i16.to_le_bytes());
+        pcm.extend_from_slice(&s.to_le_bytes());
+    }
+    sh.feed_pcm(&pcm);
+    let mut tmp = [0i16; PITCH_N];
+    let n = sh.pitch_buf().copy_linear(&mut tmp);
+    assert_eq!(n, PITCH_N);
+    // The narrow window is what Tune::listen searches — a full-window AMDF can
+    // legally land on a sub-octave, so assert in the tuner's own band.
+    let hz = passport_core::pitch::amdf_hz(&tmp, PITCH_RATE, 374, 506).unwrap_or(0);
+    assert!((hz as i32 - 440).abs() <= 8, "right-channel A4 → {hz}Hz");
+    // And the shell path must see signal at all (not a dead channel).
+    assert!(sh.mic_hz() > 0, "auto channel picked silence");
 }
 
 #[test]

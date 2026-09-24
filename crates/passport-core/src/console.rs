@@ -31,6 +31,20 @@ pub enum Command {
     Probe,
     AudioBeep,
     AudioRec,
+    AudioStop,
+    /// `None` prints the level; `Some` sets the speaker volume 0..=100.
+    Volume(Option<u8>),
+    /// Toggle the speaker mute flag (restores `volume` on unmute).
+    MuteToggle,
+    /// Join an open or WPA network directly, bypassing scan+IME.
+    WifiJoin {
+        ssid: heapless::String<32>,
+        pass: heapless::String<64>,
+    },
+    /// Drop the current Wi-Fi association, keep the saved entry.
+    WifiDisconnect,
+    /// Forget the saved Wi-Fi entry (RAM + KV slot).
+    WifiForget,
     Mic,
     Nfc,
     Theme(crate::theme::Theme),
@@ -125,6 +139,46 @@ pub fn parse_line(line: &str) -> Result<Command, ParseError> {
         "audio" => match parts.next() {
             Some("beep") | Some("play") => Ok(Command::AudioBeep),
             Some("rec") | Some("mic") => Ok(Command::AudioRec),
+            Some("stop") => Ok(Command::AudioStop),
+            _ => Err(ParseError::BadArg),
+        },
+        "vol" | "volume" => match parts.next() {
+            None => Ok(Command::Volume(None)),
+            Some(n) => {
+                let n: u8 = n.parse().map_err(|_| ParseError::BadArg)?;
+                Ok(Command::Volume(Some(n.min(100))))
+            }
+        },
+        "mute" => Ok(Command::MuteToggle),
+        "wifi" => match parts.next() {
+            None | Some("ui") => Ok(Command::RadioWifi),
+            Some("off") | Some("disconnect") | Some("disc") => Ok(Command::WifiDisconnect),
+            Some("forget") => Ok(Command::WifiForget),
+            Some("join") | Some("connect") => {
+                let mut ssid = heapless::String::new();
+                let mut pass = heapless::String::new();
+                // Last whitespace-separated token is the password when the
+                // line has ≥2 args and does not end in " open".
+                let args: heapless::Vec<&str, 8> = parts.collect();
+                if args.is_empty() {
+                    return Err(ParseError::BadArg);
+                }
+                let (ssid_parts, pass_parts): (&[&str], &[&str]) = if args.len() >= 2 {
+                    (&args[..args.len() - 1], &args[args.len() - 1..])
+                } else {
+                    (&args[..], &[])
+                };
+                for (i, p) in ssid_parts.iter().enumerate() {
+                    if i > 0 {
+                        ssid.push(' ').map_err(|_| ParseError::BadArg)?;
+                    }
+                    ssid.push_str(p).map_err(|_| ParseError::BadArg)?;
+                }
+                for p in pass_parts {
+                    pass.push_str(p).map_err(|_| ParseError::BadArg)?;
+                }
+                Ok(Command::WifiJoin { ssid, pass })
+            }
             _ => Err(ParseError::BadArg),
         },
         _ => Err(ParseError::Unknown),
@@ -166,7 +220,8 @@ pub const HELP: &str = "\
 help status apps launcher menu keys about probe nfc
 key mv <mV> [ticks] | key up|down|ok click|long
 workspace 0|1  filter <prefix>  activate [name]
-brightness 0-100  radio wifi|ble|off
-sleep light|deep  audio beep|rec  mic  theme dark|light
+brightness 0-100  vol [0-100]  mute
+radio wifi|ble|off  wifi join <ssid> [pass] | off | forget
+sleep light|deep  audio beep|rec|stop  mic  theme dark|light
 time [HH:MM]
 ";

@@ -32,10 +32,13 @@ workspaces. Long OK is still home.
 
 **Launcher:** three islands on the first screen — **Play** (Flap, Stack, Brick, Boo), **Tools** (Pulse, Tap, Tune), **System**. OK drills in; UP on the first app of a group, or Long OK in a group, zooms back out. Long OK on the island home still closes the launcher.
 
-**System:** brightness, appearance, **wifi** (scan, pick an AP, 3-key English IME
-for the password; open nets skip the IME), bluetooth, sleep, keys, about
+**System:** brightness, appearance, **volume** (vol-/vol+/mute on the ES8311
+DAC), **wifi** (scan, pick an AP, 3-key English IME for the password; open nets
+skip the IME; rescan / disconnect / forget rows; `wifi join <ssid> [pass]` from
+the console), **bluetooth** (connectable `PassportOS` + GATT Battery service;
+`BT*` while a central is connected), sleep, keys, about
 (UP/DOWN opens the factory used/free storage page).
-Wi-Fi credentials stay in RAM (the 16-byte KV slot is already full).
+Wi-Fi credentials persist in the KV page (`POSW` record) and auto-join at boot.
 
 Unplugged, the backlight turns off after **30 s** with no keys (PWM 0, not RTC
 sleep). Any key restores the previous brightness without also moving the
