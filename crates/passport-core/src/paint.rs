@@ -131,6 +131,12 @@ impl PaintPlan {
             && !self.ime_field
     }
 
+    /// Playfield pixels were drawn. Firmware must only `mark_painted` then —
+    /// a status-bar or no-op paint must not snapshot sprite diffs.
+    pub fn painted_game(self) -> bool {
+        self.game || self.game_live
+    }
+
     pub fn full(now: FrameSig) -> Self {
         match now.overlay {
             Overlay::Launcher => Self {

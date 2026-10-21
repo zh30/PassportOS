@@ -997,7 +997,23 @@ fn paint_plan_idle_flap_does_not_repaint_playfield() {
     assert!(!plan.wipe_content);
     assert!(!plan.game);
     assert!(!plan.game_live);
+    assert!(!plan.painted_game());
     assert!(plan.is_nop() || plan.status);
+}
+
+#[test]
+fn paint_plan_status_only_must_not_mark_game() {
+    let mut sh = shell_with_flap();
+    activate_flap(&mut sh);
+    sh.apply_command(parse_line("time 14:32").unwrap());
+    let prev = FrameSig::capture(&sh);
+    assert!(sh.advance_clock(60));
+    let plan = PaintPlan::diff(Some(prev), FrameSig::capture(&sh));
+    assert!(plan.status);
+    assert!(
+        !plan.painted_game(),
+        "clock/status paints must not snapshot sprites"
+    );
 }
 
 #[test]

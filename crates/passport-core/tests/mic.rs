@@ -6,7 +6,7 @@ use passport_core::board::TYPICAL_RELEASED_MV;
 use passport_core::boo::BOO_APP_ID;
 use passport_core::console::parse_line;
 use passport_core::es8311::{self, adc_clocks_on};
-use passport_core::mic::{MicEvent, ROAR_LEVEL, pcm16_le_level, pcm16_le_peak};
+use passport_core::mic::{MicEvent, ROAR_LEVEL, pcm16_le_level, pcm16_le_level_auto, pcm16_le_peak};
 use passport_core::pitch::{PITCH_N, PITCH_RATE};
 use passport_core::shell::{Overlay, Shell};
 
@@ -129,12 +129,26 @@ fn feed_pcm_auto_picks_live_channel() {
     assert!(sh.mic_hz() > 0, "auto channel picked silence");
 }
 
+fn calibrate_quiet(sh: &mut Shell) {
+    sh.mic_begin();
+    for _ in 0..16 {
+        let out = sh.tick_mic(10);
+        assert!(
+            out.lifecycle
+                .iter()
+                .all(|n| !matches!(n, AppLifecycle::Mic(_, _))),
+            "calibration must not shout, got {:?}",
+            out.lifecycle
+        );
+    }
+}
+
 #[test]
 fn tick_mic_reaches_opted_in_desk_app_not_launcher() {
     let mut sh = shell_boo();
     assert_eq!(sh.overlay(), Overlay::None);
     assert!(sh.mic_listen());
-    sh.mic_begin();
+    calibrate_quiet(&mut sh);
     let out = sh.tick_mic(ROAR_LEVEL);
     assert!(
         out.lifecycle
@@ -148,7 +162,7 @@ fn tick_mic_reaches_opted_in_desk_app_not_launcher() {
 
     sh.apply_command(parse_line("launcher").unwrap());
     assert!(!sh.mic_listen());
-    sh.mic_begin();
+    calibrate_quiet(&mut sh);
     let out = sh.tick_mic(ROAR_LEVEL);
     assert!(
         !out.lifecycle
@@ -156,6 +170,47 @@ fn tick_mic_reaches_opted_in_desk_app_not_launcher() {
             .any(|n| matches!(n, AppLifecycle::Mic(_, _))),
         "launcher must not steal mic, got {:?}",
         out.lifecycle
+    );
+}
+
+#[test]
+fn loud_floor_during_calibration_still_allows_later_shout() {
+    let mut sh = shell_boo();
+    sh.mic_begin();
+    // Floor above the clamped roar_at (100): old path fired once on sample 1
+    // then latched forever. Calibrate silently and arm without emitting.
+    for _ in 0..16 {
+        let out = sh.tick_mic(120);
+        assert!(
+            out.lifecycle.is_empty(),
+            "calibrating must not emit, got {:?}",
+            out.lifecycle
+        );
+    }
+    let held = sh.tick_mic(120);
+    assert!(held.lifecycle.is_empty(), "armed floor must not edge, {held:?}");
+    let _ = sh.tick_mic(10);
+    let shout = sh.tick_mic(120);
+    assert!(
+        shout
+            .lifecycle
+            .iter()
+            .any(|n| matches!(n, AppLifecycle::Mic(_, MicEvent::Loud))),
+        "dip then yell must fire after a loud calibrate, got {:?}",
+        shout.lifecycle
+    );
+}
+
+#[test]
+fn pcm16_level_auto_picks_live_channel() {
+    let mut right = [0u8; 16];
+    for c in right.chunks_exact_mut(4) {
+        c[2..4].copy_from_slice(&i16::MAX.to_le_bytes());
+    }
+    assert!(pcm16_le_level_auto(&right) > 200);
+    assert!(
+        pcm16_le_level_auto(&right) > pcm16_le_level(&right),
+        "auto must beat averaged stereo when one side is silent"
     );
 }
 
@@ -173,7 +228,7 @@ fn tick_mic_without_opt_in_is_silent() {
 #[test]
 fn holding_a_yell_is_one_event() {
     let mut sh = shell_boo();
-    sh.mic_begin();
+    calibrate_quiet(&mut sh);
     let a = sh.tick_mic(80);
     let b = sh.tick_mic(90);
     assert!(

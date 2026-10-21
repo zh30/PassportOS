@@ -33,6 +33,13 @@ impl MicGate {
         Self { high: false }
     }
 
+    /// Match the gate to the current level without emitting. Used when
+    /// calibration finishes while the room is already loud so the next
+    /// real shout still gets a rising edge.
+    pub fn arm_to(&mut self, level: u8, roar_at: u8) {
+        self.high = level >= roar_at;
+    }
+
     pub fn feed(&mut self, level: u8, roar_at: u8, loud_at: u8) -> Option<MicEvent> {
         if level >= loud_at {
             if self.high {
@@ -113,7 +120,15 @@ impl Mic {
 
     pub fn feed(&mut self, level: u8) -> Option<MicEvent> {
         self.level = level;
-        self.calibrate(level);
+        if self.noise_n < CALIBRATE_N {
+            self.calibrate(level);
+            if self.noise_n >= CALIBRATE_N {
+                self.gate.arm_to(level, self.roar_at);
+            }
+            // No shouts while the floor is still settling — sample 1..15
+            // used the default ROAR_LEVEL and could latch the gate forever.
+            return None;
+        }
         self.gate.feed(level, self.roar_at, self.loud_at)
     }
 
@@ -145,6 +160,27 @@ pub fn pcm16_le_peak(bytes: &[u8]) -> u16 {
 
 /// 16-bit little-endian PCM → 0..=255 RMS. Firmware calls this; tests do too.
 pub fn pcm16_le_level(bytes: &[u8]) -> u8 {
+    level_mono(bytes)
+}
+
+/// Stereo PCM: louder of L/R → 0..=255 RMS. Same channel pick as pitch —
+/// a silent side must not dilute the scare level.
+pub fn pcm16_le_level_auto(bytes: &[u8]) -> u8 {
+    let mut acc = [0u64; 2];
+    let mut n = [0u32; 2];
+    for c in bytes.chunks_exact(4) {
+        for ch in 0..2 {
+            let s = i16::from_le_bytes([c[ch * 2], c[ch * 2 + 1]]) as i32;
+            acc[ch] = acc[ch].saturating_add((s * s) as u64);
+            n[ch] = n[ch].saturating_add(1);
+        }
+    }
+    let l = rms8(acc[0], n[0]);
+    let r = rms8(acc[1], n[1]);
+    l.max(r)
+}
+
+fn level_mono(bytes: &[u8]) -> u8 {
     let mut acc = 0u64;
     let mut n = 0u32;
     for c in bytes.chunks_exact(2) {
@@ -152,6 +188,10 @@ pub fn pcm16_le_level(bytes: &[u8]) -> u8 {
         acc = acc.saturating_add((s * s) as u64);
         n = n.saturating_add(1);
     }
+    rms8(acc, n)
+}
+
+fn rms8(acc: u64, n: u32) -> u8 {
     if n == 0 {
         return 0;
     }
