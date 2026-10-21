@@ -85,7 +85,7 @@ pub fn paint<SPI, DC, CS, E>(
     shell: &Shell,
     apps: &Apps,
     prev: &mut Option<FrameSig>,
-) -> Result<(), E>
+) -> Result<PaintPlan, E>
 where
     SPI: embedded_hal::spi::SpiBus<u8, Error = E>,
     DC: embedded_hal::digital::OutputPin,
@@ -96,7 +96,7 @@ where
     let plan = PaintPlan::diff(*prev, now);
     *prev = Some(now);
     if plan.is_nop() {
-        return Ok(());
+        return Ok(plan);
     }
     let p = pal(shell);
     if plan.wipe_content {
@@ -160,7 +160,7 @@ where
     } else if plan.game_live || plan.pulse_meter {
         paint_workspace(lcd, shell, apps, p, false)?;
     }
-    Ok(())
+    Ok(plan)
 }
 
 fn fill_page<LCD, E>(lcd: &mut LCD, y: u16, h: u16, p: Palette, theme: Theme) -> Result<(), E>

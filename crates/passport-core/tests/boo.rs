@@ -261,6 +261,29 @@ fn live_scroll_skies_old_ghost_only() {
     );
 }
 
+/// A status-bar / no-op paint must not snapshot sprites. If it does, a scare
+/// between frames drops the ghost from `prev_mobs` while pixels stay put —
+/// the stuck mid-path bug on device.
+#[test]
+fn premature_mark_after_scare_leaves_ghost_unerased() {
+    let mut w = BooWorld::new(1);
+    w.start();
+    w.place(SCARE_X + 2, 0, MobKind::Ghost);
+    w.mark_painted();
+    w.roar(false);
+    assert!(w.mobs().is_empty());
+    // Bug: mark without painting (status-only dirty).
+    w.mark_painted();
+    w.tick();
+    let ops = w.live_ops();
+    assert!(
+        !ops.iter().any(|o| o.rgb565 == COL_BG
+            && o.rect.w == GHOST_W as u16
+            && o.rect.h == GHOST_H as u16),
+        "premature mark hides the scare erase — this is the stuck-ghost bug, ops={ops:?}"
+    );
+}
+
 /// Device order: mark_painted → apply_notes (roar) → tick → live paint.
 #[test]
 fn live_after_roar_skies_scared_ghost_and_score() {

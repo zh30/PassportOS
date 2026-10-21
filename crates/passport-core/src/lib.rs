@@ -71,7 +71,9 @@ pub use launcher::{
     island_icon_y, island_text_end, island_text_x, island_title_y, launcher_visible,
     system_caption,
 };
-pub use mic::{LOUD_LEVEL, MicEvent, MicGate, ROAR_LEVEL, pcm16_le_level, pcm16_le_peak};
+pub use mic::{
+    LOUD_LEVEL, MicEvent, MicGate, ROAR_LEVEL, pcm16_le_level, pcm16_le_level_auto, pcm16_le_peak,
+};
 pub use nfc::{NTAG213, NTAG213_USER_BYTES, decode_uri_tlv, encode_uri_tlv, mcu_read, mcu_write};
 pub use paint::{FrameSig, PaintPlan};
 pub use pitch::{PITCH_N, PITCH_RATE, PitchBuf, amdf_hz, cents, fold_octave};

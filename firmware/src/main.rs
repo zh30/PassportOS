@@ -66,7 +66,7 @@ use passport_core::paint::FrameSig;
 use passport_core::radio::Resource;
 use passport_core::shell::{EventOutcome, Overlay, Shell, SideEffect};
 use passport_core::wifi::{SavedWifi, WifiFail, WifiNet};
-use passport_core::{pcm16_le_level, pcm16_le_peak};
+use passport_core::{pcm16_le_level_auto, pcm16_le_peak};
 use trouble_host::prelude::*;
 
 use crate::apps::Apps;
@@ -350,6 +350,10 @@ async fn main(spawner: Spawner) {
             .build(),
     );
     let mut audio_rx = Some(i2s.i2s_rx.with_din(peripherals.GPIO4).build());
+    // One StaticCell each — `dma_*_stream_buffer!` can only be taken once.
+    // Stop / stall / re-listen must reuse these, never allocate again.
+    let mut tx_dma = Some(dma_tx_stream_buffer!(4096, 1024));
+    let mut rx_dma = Some(dma_rx_stream_buffer!(8192, 2048));
     let mut tx_xfer = None;
     let mut rx_xfer = None;
     let mut sine_idx = 0usize;
@@ -415,8 +419,7 @@ async fn main(spawner: Spawner) {
                     // Bounded playback: the loop stops the sine at the deadline.
                     beep_deadline = Some(Instant::now() + Duration::from_millis(BEEP_MS));
                     if tx_xfer.is_none() {
-                        if let Some(tx) = audio_tx.take() {
-                            let mut buf = dma_tx_stream_buffer!(4096, 1024);
+                        if let (Some(tx), Some(mut buf)) = (audio_tx.take(), tx_dma.take()) {
                             buf.push_with(|b| {
                                 fill_pcm(b, &mut sine_idx);
                                 b.len()
@@ -427,8 +430,9 @@ async fn main(spawner: Spawner) {
                                     println!("[audio] beep {BEEP_MS}ms");
                                     usb_echo!(b"[audio] beep\r\n");
                                 }
-                                Err((_, tx, _)) => {
+                                Err((_, tx, buf)) => {
                                     audio_tx = Some(tx);
+                                    tx_dma = Some(buf);
                                     println!("[audio] playback failed");
                                 }
                             }
@@ -437,16 +441,16 @@ async fn main(spawner: Spawner) {
                 }
                 SideEffect::AudioRec => {
                     if rx_xfer.is_none() {
-                        if let Some(rx) = audio_rx.take() {
-                            let buf = dma_rx_stream_buffer!(8192, 2048);
+                        if let (Some(rx), Some(buf)) = (audio_rx.take(), rx_dma.take()) {
                             match rx.read(buf) {
                                 Ok(xfer) => {
                                     rx_xfer = Some(xfer);
                                     println!("[audio] record started");
                                     usb_echo!(b"[audio] record started\r\n");
                                 }
-                                Err((_, rx, _)) => {
+                                Err((_, rx, buf)) => {
                                     audio_rx = Some(rx);
+                                    rx_dma = Some(buf);
                                     println!("[audio] record failed");
                                 }
                             }
@@ -454,15 +458,17 @@ async fn main(spawner: Spawner) {
                     }
                     // I2S master clocks come from TX; start a sine stream if idle.
                     if tx_xfer.is_none() {
-                        if let Some(tx) = audio_tx.take() {
-                            let mut buf = dma_tx_stream_buffer!(4096, 1024);
+                        if let (Some(tx), Some(mut buf)) = (audio_tx.take(), tx_dma.take()) {
                             buf.push_with(|b| {
                                 fill_pcm(b, &mut sine_idx);
                                 b.len()
                             });
                             match tx.write(buf) {
                                 Ok(xfer) => tx_xfer = Some(xfer),
-                                Err((_, tx, _)) => audio_tx = Some(tx),
+                                Err((_, tx, buf)) => {
+                                    audio_tx = Some(tx);
+                                    tx_dma = Some(buf);
+                                }
                             }
                         }
                     }
@@ -608,12 +614,14 @@ async fn main(spawner: Spawner) {
                     beep_deadline = None;
                     if !mic_owns_i2s {
                         if let Some(xfer) = rx_xfer.take() {
-                            let (rx, _) = xfer.stop();
+                            let (rx, buf) = xfer.stop();
                             audio_rx = Some(rx);
+                            rx_dma = Some(buf);
                         }
                         if let Some(xfer) = tx_xfer.take() {
-                            let (tx, _) = xfer.stop();
+                            let (tx, buf) = xfer.stop();
                             audio_tx = Some(tx);
+                            tx_dma = Some(buf);
                         }
                     }
                     println!("[audio] stop");
@@ -947,8 +955,9 @@ async fn main(spawner: Spawner) {
                 beep_deadline = None;
                 if !mic_owns_i2s {
                     if let Some(xfer) = tx_xfer.take() {
-                        let (tx, _) = xfer.stop();
+                        let (tx, buf) = xfer.stop();
                         audio_tx = Some(tx);
+                        tx_dma = Some(buf);
                     }
                     shell.exclusive.release(Resource::Audio);
                 }
@@ -982,24 +991,28 @@ async fn main(spawner: Spawner) {
                 // TX clocks the codec; RX slaves via sig_loopback. Start both
                 // DMA before poking the ADC so BCLK/WS already exist.
                 if tx_xfer.is_none() {
-                    if let Some(tx) = audio_tx.take() {
-                        let mut buf = dma_tx_stream_buffer!(4096, 1024);
+                    if let (Some(tx), Some(mut buf)) = (audio_tx.take(), tx_dma.take()) {
                         buf.push_with(|b| {
                             fill_silence(b);
                             b.len()
                         });
                         match tx.write(buf) {
                             Ok(xfer) => tx_xfer = Some(xfer),
-                            Err((_, tx, _)) => audio_tx = Some(tx),
+                            Err((_, tx, buf)) => {
+                                audio_tx = Some(tx);
+                                tx_dma = Some(buf);
+                            }
                         }
                     }
                 }
                 if rx_xfer.is_none() {
-                    if let Some(rx) = audio_rx.take() {
-                        let buf = dma_rx_stream_buffer!(8192, 2048);
+                    if let (Some(rx), Some(buf)) = (audio_rx.take(), rx_dma.take()) {
                         match rx.read(buf) {
                             Ok(xfer) => rx_xfer = Some(xfer),
-                            Err((_, rx, _)) => audio_rx = Some(rx),
+                            Err((_, rx, buf)) => {
+                                audio_rx = Some(rx);
+                                rx_dma = Some(buf);
+                            }
                         }
                     }
                 }
@@ -1020,63 +1033,107 @@ async fn main(spawner: Spawner) {
                 mic_skip = 4;
                 println!("[mic] listen");
             }
+            // Keep BCLK/WS alive before any SPI/AMDF work — loopback RX
+            // dies if TX underruns during a full playfield paint.
+            if let Some(xfer) = tx_xfer.as_mut() {
+                while xfer.available_bytes() > 0 {
+                    let _ = xfer.push_with(|buf| {
+                        fill_silence(buf);
+                        buf.len()
+                    });
+                }
+            }
             if let Some(xfer) = rx_xfer.as_mut() {
                 let mut tmp = [0u8; 512];
-                let n = xfer.pop(&mut tmp);
-                if n > 0 {
+                // Drain several chunks per 5 ms tick (16 kHz stereo ≈ 320 B).
+                for _ in 0..8 {
+                    let n = xfer.pop(&mut tmp);
+                    if n == 0 {
+                        break;
+                    }
                     rx_bytes += n as u64;
                     rx_at = Instant::now();
-                    shell.feed_pcm(&tmp[..n]);
-                }
-                if n > 0 && mic_skip > 0 {
-                    mic_skip -= 1;
-                } else if n > 0 {
-                    let lv = pcm16_le_level(&tmp[..n]);
-                    let pk = pcm16_le_peak(&tmp[..n]);
-                    mic_level = Some(lv);
-                    shell.note_mic_peak(pk);
-                    if !mic_logged {
-                        println!(
-                            "[mic] lv={lv} peak={pk} n={n} {:02x}{:02x} {:02x}{:02x} {:02x}{:02x} {:02x}{:02x}",
-                            tmp.get(0).copied().unwrap_or(0),
-                            tmp.get(1).copied().unwrap_or(0),
-                            tmp.get(2).copied().unwrap_or(0),
-                            tmp.get(3).copied().unwrap_or(0),
-                            tmp.get(4).copied().unwrap_or(0),
-                            tmp.get(5).copied().unwrap_or(0),
-                            tmp.get(6).copied().unwrap_or(0),
-                            tmp.get(7).copied().unwrap_or(0),
-                        );
-                        mic_logged = true;
+                    // Pitch AMDF is Tune-only; Boo just needs the RMS level.
+                    if shell.focused_app_name() == Some("tune") {
+                        shell.feed_pcm(&tmp[..n]);
+                    }
+                    if mic_skip > 0 {
+                        mic_skip -= 1;
+                    } else {
+                        let lv = pcm16_le_level_auto(&tmp[..n]);
+                        let pk = pcm16_le_peak(&tmp[..n]);
+                        mic_level = Some(lv);
+                        shell.note_mic_peak(pk);
+                        if !mic_logged {
+                            println!(
+                                "[mic] lv={lv} peak={pk} n={n} {:02x}{:02x} {:02x}{:02x} {:02x}{:02x} {:02x}{:02x}",
+                                tmp.get(0).copied().unwrap_or(0),
+                                tmp.get(1).copied().unwrap_or(0),
+                                tmp.get(2).copied().unwrap_or(0),
+                                tmp.get(3).copied().unwrap_or(0),
+                                tmp.get(4).copied().unwrap_or(0),
+                                tmp.get(5).copied().unwrap_or(0),
+                                tmp.get(6).copied().unwrap_or(0),
+                                tmp.get(7).copied().unwrap_or(0),
+                            );
+                            mic_logged = true;
+                        }
                     }
                 }
             }
-            // RX stall watchdog: the codec ADC can wedge after clock glitches;
-            // restart the DMA read if no bytes arrive for 500 ms.
-            if mic_owns_i2s && rx_at.elapsed().as_millis() > 500 {
+            // RX stall watchdog: codec/clock glitches wedge RX. Restart TX+RX
+            // (loopback shares BCLK/WS) and reuse the boot-time StaticCell
+            // buffers — a second `dma_*_stream_buffer!` panics and freezes Boo.
+            // 800 ms: a Full playfield paint can exceed 500 ms and used to
+            // false-trigger a restart while DMA was still healthy.
+            if mic_owns_i2s && rx_at.elapsed().as_millis() > 800 {
                 rx_stalls += 1;
                 rx_at = Instant::now();
                 if let Some(xfer) = rx_xfer.take() {
-                    let (rx, _) = xfer.stop();
+                    let (rx, buf) = xfer.stop();
                     audio_rx = Some(rx);
+                    rx_dma = Some(buf);
                 }
-                if let Some(rx) = audio_rx.take() {
-                    let buf = dma_rx_stream_buffer!(8192, 2048);
-                    match rx.read(buf) {
-                        Ok(xfer) => rx_xfer = Some(xfer),
-                        Err((_, rx, _)) => audio_rx = Some(rx),
+                if let Some(xfer) = tx_xfer.take() {
+                    let (tx, buf) = xfer.stop();
+                    audio_tx = Some(tx);
+                    tx_dma = Some(buf);
+                }
+                if let (Some(tx), Some(mut buf)) = (audio_tx.take(), tx_dma.take()) {
+                    buf.push_with(|b| {
+                        fill_silence(b);
+                        b.len()
+                    });
+                    match tx.write(buf) {
+                        Ok(xfer) => tx_xfer = Some(xfer),
+                        Err((_, tx, buf)) => {
+                            audio_tx = Some(tx);
+                            tx_dma = Some(buf);
+                        }
                     }
                 }
+                if let (Some(rx), Some(buf)) = (audio_rx.take(), rx_dma.take()) {
+                    match rx.read(buf) {
+                        Ok(xfer) => rx_xfer = Some(xfer),
+                        Err((_, rx, buf)) => {
+                            audio_rx = Some(rx);
+                            rx_dma = Some(buf);
+                        }
+                    }
+                }
+                let _ = codec::es8311_start(&mut i2c);
                 println!("[mic] rx stall #{rx_stalls} bytes={rx_bytes}");
             }
         } else if mic_owns_i2s {
             if let Some(xfer) = rx_xfer.take() {
-                let (rx, _) = xfer.stop();
+                let (rx, buf) = xfer.stop();
                 audio_rx = Some(rx);
+                rx_dma = Some(buf);
             }
             if let Some(xfer) = tx_xfer.take() {
-                let (tx, _) = xfer.stop();
+                let (tx, buf) = xfer.stop();
                 audio_tx = Some(tx);
+                tx_dma = Some(buf);
             }
             shell.exclusive.release(Resource::Audio);
             println!("[mic] stop bytes={rx_bytes} stalls={rx_stalls}");
@@ -1157,7 +1214,7 @@ async fn main(spawner: Spawner) {
         request_game!(frame_due);
 
         if let Some(xfer) = tx_xfer.as_mut() {
-            if xfer.available_bytes() > 0 {
+            while xfer.available_bytes() > 0 {
                 let _ = xfer.push_with(|buf| {
                     if mic_owns_i2s {
                         fill_silence(buf);
@@ -1179,43 +1236,74 @@ async fn main(spawner: Spawner) {
         }
 
         if shell.dirty && !shell.is_standby() {
-            let mark_flap = shell.overlay() == Overlay::None
+            let desk = shell.overlay() == Overlay::None;
+            let mark_flap = desk
                 && shell.focused_app_name() == Some("flap")
                 && apps.flap.redraw() != Redraw::None;
-            let mark_stack = shell.overlay() == Overlay::None
+            let mark_stack = desk
                 && shell.focused_app_name() == Some("stack")
                 && apps.stack.redraw() != Redraw::None;
-            let mark_brick = shell.overlay() == Overlay::None
+            let mark_brick = desk
                 && shell.focused_app_name() == Some("brick")
                 && apps.brick.redraw() != Redraw::None;
-            let mark_boo = shell.overlay() == Overlay::None
+            let mark_boo = desk
                 && shell.focused_app_name() == Some("boo")
                 && apps.boo.redraw() != Redraw::None;
-            let mark_tune = shell.overlay() == Overlay::None
+            let mark_tune = desk
                 && shell.focused_app_name() == Some("tune")
                 && apps.tune.redraw() != Redraw::None;
             shell.dirty = false;
-            if paint(&mut lcd, &shell, &apps, &mut frame).is_err() {
-                println!("[boot] display paint failed");
-            } else {
-                if mark_flap {
-                    apps.flap.mark_painted();
+            // Only snapshot sprite diffs after a real playfield blit. A
+            // status-bar / no-op paint used to call mark_painted anyway —
+            // Boo then dropped scared ghosts from prev_mobs while their
+            // pixels stayed on the glass (stuck mid-path).
+            match paint(&mut lcd, &shell, &apps, &mut frame) {
+                Err(_) => println!("[boot] display paint failed"),
+                Ok(plan) => {
+                    let game = plan.painted_game();
+                    if game && mark_flap {
+                        apps.flap.mark_painted();
+                    }
+                    if game && mark_stack {
+                        apps.stack.mark_painted();
+                    }
+                    if game && mark_brick {
+                        apps.brick.mark_painted();
+                    }
+                    if game && mark_boo {
+                        apps.boo.mark_painted();
+                    }
+                    if game && mark_tune {
+                        apps.tune.mark_painted();
+                    }
+                    if shell.overlay() != last_overlay {
+                        last_overlay = shell.overlay();
+                        println!("[ui] painted overlay={}", overlay_name(last_overlay));
+                    }
                 }
-                if mark_stack {
-                    apps.stack.mark_painted();
+            }
+        }
+
+        // SPI paint can last tens of ms — top up TX and drain RX so the
+        // stall watchdog does not fire on a healthy but briefly starved bus.
+        if mic_owns_i2s {
+            if let Some(xfer) = tx_xfer.as_mut() {
+                while xfer.available_bytes() > 0 {
+                    let _ = xfer.push_with(|buf| {
+                        fill_silence(buf);
+                        buf.len()
+                    });
                 }
-                if mark_brick {
-                    apps.brick.mark_painted();
-                }
-                if mark_boo {
-                    apps.boo.mark_painted();
-                }
-                if mark_tune {
-                    apps.tune.mark_painted();
-                }
-                if shell.overlay() != last_overlay {
-                    last_overlay = shell.overlay();
-                    println!("[ui] painted overlay={}", overlay_name(last_overlay));
+            }
+            if let Some(xfer) = rx_xfer.as_mut() {
+                let mut tmp = [0u8; 512];
+                for _ in 0..8 {
+                    let n = xfer.pop(&mut tmp);
+                    if n == 0 {
+                        break;
+                    }
+                    rx_bytes += n as u64;
+                    rx_at = Instant::now();
                 }
             }
         }
