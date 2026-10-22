@@ -5,6 +5,7 @@ extern crate alloc;
 
 mod apps;
 mod codec;
+mod sntp;
 mod draw;
 mod font;
 mod st7789;
@@ -12,7 +13,7 @@ mod store;
 mod ui;
 
 use core::fmt::Write as _;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicPtr, AtomicU8, Ordering};
 
 use embassy_executor::Spawner;
 use embassy_futures::select::{Either, select, select3};
@@ -27,10 +28,11 @@ use esp_hal::{
     analog::adc::{Adc, AdcCalCurve, AdcConfig, Attenuation},
     clock::CpuClock,
     delay::Delay,
+    dma::{DmaRxStreamBuf, DmaTxStreamBuf},
     dma_rx_stream_buffer, dma_tx_stream_buffer,
     gpio::{DriveMode, Level, Output, OutputConfig},
     i2c::master::{Config as I2cConfig, I2c},
-    i2s::master::{Channels, DataFormat, I2s, TdmConfig},
+    i2s::master::{Channels, DataFormat, I2s, I2sRxDmaTransfer, I2sTxDmaTransfer, TdmConfig},
     ledc::{
         LSGlobalClkSource, Ledc, LowSpeed,
         channel::{self, ChannelIFace},
@@ -49,7 +51,8 @@ use esp_println::println;
 use esp_radio::ble::controller::BleConnector;
 use esp_radio::wifi::{
     AuthenticationMethod, AuthenticationMethodConfig, Config as WifiNetConfig, ConnectionError,
-    ControllerConfig, DisconnectReason, Password, Ssid, WifiController, scan::ScanConfig,
+    ControllerConfig, DisconnectReason, Password, PowerSaveMode, Ssid, WifiController,
+    scan::ScanConfig,
     sta::StationConfig,
 };
 use passport_core::api::App;
@@ -98,12 +101,101 @@ enum WifiEvt {
     Failed(WifiFail),
     /// Association dropped (or peer left) after a successful join.
     Disconnected,
+    /// UTC unix seconds from SNTP. The UI task must not await the radio.
+    Synced(u32),
 }
 
 static WIFI_CMD: Channel<CriticalSectionRawMutex, WifiCmd, 2> = Channel::new();
 static WIFI_EVT: Channel<CriticalSectionRawMutex, WifiEvt, 4> = Channel::new();
 /// Worker acks teardown here; the swap path waits on it before starting BLE.
 static WIFI_DONE: Channel<CriticalSectionRawMutex, (), 1> = Channel::new();
+
+type TxXfer = I2sTxDmaTransfer<'static, esp_hal::Async, DmaTxStreamBuf>;
+type RxXfer = I2sRxDmaTransfer<'static, esp_hal::Async, DmaRxStreamBuf>;
+static TX_PTR: AtomicPtr<TxXfer> = AtomicPtr::new(core::ptr::null_mut());
+static RX_PTR: AtomicPtr<RxXfer> = AtomicPtr::new(core::ptr::null_mut());
+/// Bytes, loudest level, and peak popped while SPI owns the CPU.
+/// The UI task is the only caller of `pump_audio` and `fold_pump`.
+struct PumpMeter(core::cell::UnsafeCell<(u64, u8, u16)>);
+unsafe impl Sync for PumpMeter {}
+static PUMP: PumpMeter = PumpMeter(core::cell::UnsafeCell::new((0, 0, 0)));
+/// `audio beep` while the mic owns I2S: the TX refill plays the sine so the
+/// speaker can couple into the capsule. Same task as the pump.
+static BEEP_ON: AtomicU8 = AtomicU8::new(0);
+struct SineIdx(core::cell::UnsafeCell<usize>);
+unsafe impl Sync for SineIdx {}
+static SINE_IDX: SineIdx = SineIdx(core::cell::UnsafeCell::new(0));
+
+fn publish_audio(tx: *mut TxXfer, rx: *mut RxXfer) {
+    TX_PTR.store(tx, Ordering::Relaxed);
+    RX_PTR.store(rx, Ordering::Relaxed);
+}
+
+fn fold_pump(rx_bytes: &mut u64, rx_at: &mut Instant) -> (u8, u16) {
+    let (n, lv, pk) = unsafe {
+        let slot = &mut *PUMP.0.get();
+        let v = *slot;
+        *slot = (0, 0, 0);
+        v
+    };
+    if n > 0 {
+        *rx_bytes = rx_bytes.saturating_add(n);
+        *rx_at = Instant::now();
+    }
+    (lv, pk)
+}
+
+fn note_pump(n: usize, lv: u8, pk: u16) {
+    unsafe {
+        let slot = &mut *PUMP.0.get();
+        slot.0 = slot.0.saturating_add(n as u64);
+        if lv > slot.1 {
+            slot.1 = lv;
+        }
+        if pk > slot.2 {
+            slot.2 = pk;
+        }
+    }
+}
+
+fn fill_tx(buf: &mut [u8]) {
+    if BEEP_ON.load(Ordering::Relaxed) != 0 {
+        let idx = unsafe { &mut *SINE_IDX.0.get() };
+        fill_pcm(buf, idx);
+    } else {
+        fill_silence(buf);
+    }
+}
+
+/// Called from the display fill/text path. Must not touch SPI.
+fn pump_audio() {
+    unsafe {
+        let tx = TX_PTR.load(Ordering::Relaxed);
+        if !tx.is_null() {
+            let tx = &mut *tx;
+            while tx.available_bytes() > 0 {
+                let _ = tx.push_with(|buf| {
+                    fill_tx(buf);
+                    buf.len()
+                });
+            }
+        }
+        let rx = RX_PTR.load(Ordering::Relaxed);
+        if !rx.is_null() {
+            let rx = &mut *rx;
+            let mut tmp = [0u8; 512];
+            for _ in 0..8 {
+                let n = rx.pop(&mut tmp);
+                if n == 0 {
+                    break;
+                }
+                let lv = pcm16_le_level_auto(&tmp[..n]);
+                let pk = pcm16_le_peak(&tmp[..n]);
+                note_pump(n, lv, pk);
+            }
+        }
+    }
+}
 
 enum BleCmd {
     Start,
@@ -278,7 +370,7 @@ async fn main(spawner: Spawner) {
         let _ = codec::es8311_set_volume(&mut i2c, shell.status.volume, shell.status.muted);
     }
     if cw_ok {
-        if let Some((soc, mv)) = codec::cw2017_soc_mv(&mut i2c) {
+        if let Ok((soc, mv)) = codec::cw2017_soc_mv(&mut i2c) {
             shell.status.battery_soc = Some(soc);
             shell.status.battery_mv = Some(mv);
         }
@@ -352,8 +444,10 @@ async fn main(spawner: Spawner) {
     let mut audio_rx = Some(i2s.i2s_rx.with_din(peripherals.GPIO4).build());
     // One StaticCell each — `dma_*_stream_buffer!` can only be taken once.
     // Stop / stall / re-listen must reuse these, never allocate again.
-    let mut tx_dma = Some(dma_tx_stream_buffer!(4096, 1024));
-    let mut rx_dma = Some(dma_rx_stream_buffer!(8192, 2048));
+    // 16 KB TX is ~256 ms of 16 kHz stereo silence, so one full paint cannot
+    // underrun BCLK. 16 KB RX survives the same gap without the DMA halting.
+    let mut tx_dma = Some(dma_tx_stream_buffer!(16384, 1024));
+    let mut rx_dma = Some(dma_rx_stream_buffer!(16384, 2048));
     let mut tx_xfer = None;
     let mut rx_xfer = None;
     let mut sine_idx = 0usize;
@@ -383,6 +477,12 @@ async fn main(spawner: Spawner) {
     let mut last_frame = Instant::now();
     let mut mic_owns_i2s = false;
     let mut mic_logged = false;
+    let mut mic_lv_at = Instant::now();
+    let mut bat_fail_logged = false;
+    let mut idle_slept = false;
+    // Light sleep drops USB-Serial/JTAG, so the halt length is printed on the
+    // next console line, after the host has the port again.
+    let mut sleep_note: Option<u64> = None;
     let mut mic_skip = 0u8;
     let mut beep_deadline: Option<Instant> = None;
     // RX watchdog state: bytes seen + last progress timestamp.
@@ -414,10 +514,15 @@ async fn main(spawner: Spawner) {
                     println!("{p}");
                     usb_echo!(p.as_bytes());
                     usb_echo!(b"\r\n");
+                    let d = codec::cw2017_diag(&mut i2c);
+                    println!("{d}");
+                    usb_echo!(d.as_bytes());
+                    usb_echo!(b"\r\n");
                 }
                 SideEffect::AudioBeep => {
                     // Bounded playback: the loop stops the sine at the deadline.
                     beep_deadline = Some(Instant::now() + Duration::from_millis(BEEP_MS));
+                    BEEP_ON.store(1, Ordering::Relaxed);
                     if tx_xfer.is_none() {
                         if let (Some(tx), Some(mut buf)) = (audio_tx.take(), tx_dma.take()) {
                             buf.push_with(|b| {
@@ -437,6 +542,9 @@ async fn main(spawner: Spawner) {
                                 }
                             }
                         }
+                    } else {
+                        println!("[audio] beep {BEEP_MS}ms");
+                        usb_echo!(b"[audio] beep\r\n");
                     }
                 }
                 SideEffect::AudioRec => {
@@ -766,10 +874,12 @@ async fn main(spawner: Spawner) {
                 SideEffect::SleepLight => {
                     println!("[sleep] light 2000ms");
                     usb_echo!(b"[sleep] light 2000ms\r\n");
+                    let t0 = esp_hal::time::Instant::now();
                     lp.set_wakeup_deadline(
-                        esp_hal::time::Instant::now() + esp_hal::time::Duration::from_millis(2000),
+                        t0 + esp_hal::time::Duration::from_millis(2000),
                     );
                     lp.sleep_light(RtcSleepConfig::default());
+                    sleep_note = Some(t0.elapsed().as_millis());
                     println!("[sleep] wake rtc");
                 }
                 SideEffect::SleepDeep => {
@@ -927,6 +1037,16 @@ async fn main(spawner: Spawner) {
                     shell.apply_wifi_result(false, Some(why));
                     println!("[wifi] join fail {}", why.as_str());
                 }
+                WifiEvt::Synced(unix) => {
+                    shell.status.clock.set_unix(unix);
+                    if let Some(mins) = shell.status.clock.minutes_of_day() {
+                        passport_core::write_tod(&mut kv, mins);
+                    }
+                    clock_anchor = Instant::now();
+                    clock_applied = 0;
+                    shell.dirty = true;
+                    println!("[clock] sntp {}", shell.status.clock.format_hm());
+                }
                 WifiEvt::Disconnected => {
                     let side = shell.apply_wifi_drop();
                     println!("[wifi] dropped");
@@ -953,6 +1073,7 @@ async fn main(spawner: Spawner) {
         if let Some(d) = beep_deadline {
             if start >= d {
                 beep_deadline = None;
+                BEEP_ON.store(0, Ordering::Relaxed);
                 if !mic_owns_i2s {
                     if let Some(xfer) = tx_xfer.take() {
                         let (tx, buf) = xfer.stop();
@@ -1033,20 +1154,26 @@ async fn main(spawner: Spawner) {
                 mic_skip = 4;
                 println!("[mic] listen");
             }
+            let (pump_lv, pump_pk) = fold_pump(&mut rx_bytes, &mut rx_at);
             // Keep BCLK/WS alive before any SPI/AMDF work — loopback RX
             // dies if TX underruns during a full playfield paint.
             if let Some(xfer) = tx_xfer.as_mut() {
                 while xfer.available_bytes() > 0 {
                     let _ = xfer.push_with(|buf| {
-                        fill_silence(buf);
+                        fill_tx(buf);
                         buf.len()
                     });
                 }
             }
             if let Some(xfer) = rx_xfer.as_mut() {
                 let mut tmp = [0u8; 512];
-                // Drain several chunks per 5 ms tick (16 kHz stereo ≈ 320 B).
-                for _ in 0..8 {
+                // Loudest chunk in this tick, including samples pumped during SPI.
+                // The last 512 bytes are often silence after a short shout.
+                let mut best_lv = pump_lv;
+                let mut best_pk = pump_pk;
+                let mut heard = pump_pk > 0;
+                // Empty a full 16 KB RX buffer in one tick (32 × 512).
+                for _ in 0..32 {
                     let n = xfer.pop(&mut tmp);
                     if n == 0 {
                         break;
@@ -1059,35 +1186,53 @@ async fn main(spawner: Spawner) {
                     }
                     if mic_skip > 0 {
                         mic_skip -= 1;
-                    } else {
-                        let lv = pcm16_le_level_auto(&tmp[..n]);
-                        let pk = pcm16_le_peak(&tmp[..n]);
-                        mic_level = Some(lv);
-                        shell.note_mic_peak(pk);
-                        if !mic_logged {
-                            println!(
-                                "[mic] lv={lv} peak={pk} n={n} {:02x}{:02x} {:02x}{:02x} {:02x}{:02x} {:02x}{:02x}",
-                                tmp.get(0).copied().unwrap_or(0),
-                                tmp.get(1).copied().unwrap_or(0),
-                                tmp.get(2).copied().unwrap_or(0),
-                                tmp.get(3).copied().unwrap_or(0),
-                                tmp.get(4).copied().unwrap_or(0),
-                                tmp.get(5).copied().unwrap_or(0),
-                                tmp.get(6).copied().unwrap_or(0),
-                                tmp.get(7).copied().unwrap_or(0),
-                            );
-                            mic_logged = true;
-                        }
+                        continue;
+                    }
+                    heard = true;
+                    let lv = pcm16_le_level_auto(&tmp[..n]);
+                    let pk = pcm16_le_peak(&tmp[..n]);
+                    if lv > best_lv {
+                        best_lv = lv;
+                    }
+                    if pk > best_pk {
+                        best_pk = pk;
+                    }
+                    if !mic_logged {
+                        println!(
+                            "[mic] lv={lv} peak={pk} n={n} {:02x}{:02x} {:02x}{:02x} {:02x}{:02x} {:02x}{:02x}",
+                            tmp.get(0).copied().unwrap_or(0),
+                            tmp.get(1).copied().unwrap_or(0),
+                            tmp.get(2).copied().unwrap_or(0),
+                            tmp.get(3).copied().unwrap_or(0),
+                            tmp.get(4).copied().unwrap_or(0),
+                            tmp.get(5).copied().unwrap_or(0),
+                            tmp.get(6).copied().unwrap_or(0),
+                            tmp.get(7).copied().unwrap_or(0),
+                        );
+                        mic_logged = true;
+                    }
+                }
+                if heard {
+                    mic_level = Some(best_lv);
+                    shell.note_mic_peak(best_pk);
+                    if best_lv >= shell.mic_roar_at() && mic_lv_at.elapsed().as_millis() >= 1000 {
+                        println!("[mic] shout lv={best_lv} roar={}", shell.mic_roar_at());
+                        mic_lv_at = Instant::now();
                     }
                 }
             }
-            // RX stall watchdog: codec/clock glitches wedge RX. Restart TX+RX
-            // (loopback shares BCLK/WS) and reuse the boot-time StaticCell
-            // buffers — a second `dma_*_stream_buffer!` panics and freezes Boo.
-            // 800 ms: a Full playfield paint can exceed 500 ms and used to
-            // false-trigger a restart while DMA was still healthy.
-            if mic_owns_i2s && rx_at.elapsed().as_millis() > 800 {
+            // Clock really stopped: no RX byte for 800 ms after the paint pump
+            // was folded in. Log the gap and whether TX still had room (room
+            // means the silence buffer was consumed). Reuse the boot DMA
+            // buffers — a second `dma_*_stream_buffer!` panics.
+            let gap_ms = rx_at.elapsed().as_millis();
+            if mic_owns_i2s && gap_ms > 800 {
+                let tx_avail = tx_xfer.as_mut().map(|t| t.available_bytes()).unwrap_or(0);
                 rx_stalls += 1;
+                println!(
+                    "[mic] rx stall #{rx_stalls} gap={gap_ms}ms tx_avail={tx_avail} bytes={rx_bytes}"
+                );
+                publish_audio(core::ptr::null_mut(), core::ptr::null_mut());
                 rx_at = Instant::now();
                 if let Some(xfer) = rx_xfer.take() {
                     let (rx, buf) = xfer.stop();
@@ -1121,10 +1266,15 @@ async fn main(spawner: Spawner) {
                         }
                     }
                 }
-                let _ = codec::es8311_start(&mut i2c);
-                println!("[mic] rx stall #{rx_stalls} bytes={rx_bytes}");
             }
+            publish_audio(
+                tx_xfer.as_mut().map(|p| p as *mut TxXfer).unwrap_or(core::ptr::null_mut()),
+                rx_xfer.as_mut().map(|p| p as *mut RxXfer).unwrap_or(core::ptr::null_mut()),
+            );
+            crate::st7789::set_audio_service(Some(pump_audio));
         } else if mic_owns_i2s {
+            publish_audio(core::ptr::null_mut(), core::ptr::null_mut());
+            crate::st7789::set_audio_service(None);
             if let Some(xfer) = rx_xfer.take() {
                 let (rx, buf) = xfer.stop();
                 audio_rx = Some(rx);
@@ -1217,7 +1367,7 @@ async fn main(spawner: Spawner) {
             while xfer.available_bytes() > 0 {
                 let _ = xfer.push_with(|buf| {
                     if mic_owns_i2s {
-                        fill_silence(buf);
+                        fill_tx(buf);
                     } else {
                         fill_pcm(buf, &mut sine_idx);
                     }
@@ -1290,7 +1440,7 @@ async fn main(spawner: Spawner) {
             if let Some(xfer) = tx_xfer.as_mut() {
                 while xfer.available_bytes() > 0 {
                     let _ = xfer.push_with(|buf| {
-                        fill_silence(buf);
+                        fill_tx(buf);
                         buf.len()
                     });
                 }
@@ -1304,6 +1454,9 @@ async fn main(spawner: Spawner) {
                     }
                     rx_bytes += n as u64;
                     rx_at = Instant::now();
+                    let lv = pcm16_le_level_auto(&tmp[..n]);
+                    let pk = pcm16_le_peak(&tmp[..n]);
+                    note_pump(n, lv, pk);
                 }
             }
         }
@@ -1318,13 +1471,37 @@ async fn main(spawner: Spawner) {
 
         if frame_due && battery_poll_due(ticks) {
             if cw_ok {
-                if let Some((soc, mv)) = codec::cw2017_soc_mv(&mut i2c) {
-                    BLE_BATT.store(soc, Ordering::Relaxed);
-                    last_soc = shell.status.battery_soc;
-                    if shell.status.battery_soc != Some(soc) {
-                        shell.status.battery_soc = Some(soc);
-                        shell.status.battery_mv = Some(mv);
-                        shell.dirty = true;
+                match codec::cw2017_soc_mv(&mut i2c) {
+                    Ok((soc, mv)) => {
+                        bat_fail_logged = false;
+                        BLE_BATT.store(soc, Ordering::Relaxed);
+                        last_soc = shell.status.battery_soc;
+                        if shell.status.battery_soc != Some(soc) {
+                            shell.status.battery_soc = Some(soc);
+                            shell.status.battery_mv = Some(mv);
+                            shell.dirty = true;
+                        }
+                    }
+                    Err(why) => {
+                        if !bat_fail_logged {
+                            bat_fail_logged = true;
+                            match why {
+                                codec::Cw2017Fail::Io => {
+                                    println!("[bat] cw2017 i2c fail");
+                                }
+                                codec::Cw2017Fail::Soc {
+                                    soc,
+                                    frac,
+                                    vcell,
+                                    mode,
+                                } => {
+                                    println!(
+                                        "[bat] cw2017 soc={soc:02x} frac={frac:02x} vcell={vcell:#x} mode={mode:02x}"
+                                    );
+                                }
+                            }
+                            let _ = codec::cw2017_wake(&mut i2c);
+                        }
                     }
                 }
             }
@@ -1332,6 +1509,29 @@ async fn main(spawner: Spawner) {
             if idle_telemetry_due(ticks) {
                 println!("{}", shell.status.format());
             }
+        }
+
+        // Unplugged standby: backlight is already 0. Sleep the CPU in short
+        // slices so a ladder press is sampled on the next wake. Charging
+        // (USB SOF or rising SOC) stays awake. Timer wakeup only — GPIO0 is
+        // the ADC ladder and cannot be a digital wake pad at the same time.
+        if shell.is_standby() && !shell.status.charging {
+            let t0 = esp_hal::time::Instant::now();
+            lp.set_wakeup_deadline(t0 + esp_hal::time::Duration::from_millis(200));
+            lp.sleep_light(RtcSleepConfig::default());
+            let slept = t0.elapsed().as_millis();
+            sleep_note = Some(slept);
+            if !idle_slept {
+                idle_slept = true;
+                println!("[idle] light sleep {slept}ms");
+            }
+            // A rejected sleep returns immediately. Spinning that path would
+            // draw more than the awake 5 ms tick, so wait the slice out.
+            if slept < 20 {
+                Timer::after(Duration::from_millis(200)).await;
+            }
+        } else {
+            idle_slept = false;
         }
 
         let used = start.elapsed().as_millis();
@@ -1345,6 +1545,9 @@ async fn main(spawner: Spawner) {
             Either::First(Ok(1)) => match byte[0] {
                 b'\r' | b'\n' => {
                     if !line.is_empty() {
+                        if let Some(ms) = sleep_note.take() {
+                            println!("[sleep] held {ms}ms");
+                        }
                         let parsed = parse_line(line.as_str());
                         line.clear();
                         match parsed {
@@ -1439,6 +1642,19 @@ fn wifi_fail(e: ConnectionError) -> WifiFail {
         },
         ConnectionError::WifiError(_) => WifiFail::Radio,
         _ => WifiFail::Dropped,
+    }
+}
+
+/// Let modem sleep power down MAC and baseband. Only after the stack is up.
+fn wifi_mac_sleep() {
+    unsafe extern "C" {
+        fn esp_wifi_internal_set_mac_sleep(enable: bool) -> i32;
+    }
+    let rc = unsafe { esp_wifi_internal_set_mac_sleep(true) };
+    if rc == 0 {
+        println!("[wifi] mac sleep");
+    } else {
+        println!("[wifi] mac sleep fail {rc}");
     }
 }
 
@@ -1556,15 +1772,36 @@ async fn wifi_worker(wifi: esp_hal::peripherals::WIFI<'static>) {
                     WIFI_EVT.send(WifiEvt::Failed(WifiFail::Radio)).await;
                     continue;
                 }
-                match select3(
-                    controller.connect_async(),
-                    Timer::after(Duration::from_secs(15)),
-                    WIFI_CMD.receive(),
-                )
-                .await
-                {
+                // AuthenticationExpired is often a stale AP session right after
+                // boot, not a bad password. One retry, then surface the failure.
+                let mut attempt = 0u8;
+                loop {
+                    attempt = attempt.saturating_add(1);
+                    match select3(
+                        controller.connect_async(),
+                        Timer::after(Duration::from_secs(15)),
+                        WIFI_CMD.receive(),
+                    )
+                    .await
+                    {
                     embassy_futures::select::Either3::First(Ok(_)) => {
                         WIFI_EVT.send(WifiEvt::Connected).await;
+                        match crate::sntp::utc_unix().await {
+                            Some(unix) => WIFI_EVT.send(WifiEvt::Synced(unix)).await,
+                            None => println!("[clock] sntp fail"),
+                        }
+                        // Minimum modem sleep lets the radio drop between
+                        // beacons. Without it, light-sleep slices halt the CPU
+                        // but the RF stays in RX and idle current does not fall.
+                        if controller.set_power_saving(PowerSaveMode::Minimum).is_err() {
+                            println!("[wifi] ps fail");
+                        } else {
+                            println!("[wifi] ps min");
+                            // PS min drops the RF between beacons. MAC/baseband
+                            // power-down is what keeps that from staying in RX
+                            // across a CPU light-sleep slice.
+                            wifi_mac_sleep();
+                        }
                         // Watch the link: report the drop so the shell can
                         // boundedly rejoin a saved open network.
                         match select(
@@ -1597,14 +1834,27 @@ async fn wifi_worker(wifi: esp_hal::peripherals::WIFI<'static>) {
                         }
                     }
                     embassy_futures::select::Either3::First(Err(e)) => {
+                        println!("[wifi] join err {e:?}");
+                        let expired = matches!(
+                            e,
+                            ConnectionError::Failed(info)
+                                if info.reason == DisconnectReason::AuthenticationExpired
+                        );
+                        if expired && attempt == 1 {
+                            println!("[wifi] auth expired, retry");
+                            Timer::after(Duration::from_millis(800)).await;
+                            continue;
+                        }
                         let fail = wifi_fail(e);
                         println!("[wifi] join err {}", fail.as_str());
                         WIFI_EVT.send(WifiEvt::Failed(fail)).await;
+                        break;
                     }
                     embassy_futures::select::Either3::Second(_) => {
                         println!("[wifi] join timeout");
                         let _ = controller.disconnect_async().await;
                         WIFI_EVT.send(WifiEvt::Failed(WifiFail::Timeout)).await;
+                        break;
                     }
                     embassy_futures::select::Either3::Third(cmd) => {
                         // Join aborted by a command.
@@ -1612,7 +1862,10 @@ async fn wifi_worker(wifi: esp_hal::peripherals::WIFI<'static>) {
                             Some(c) => controller = c,
                             None => return,
                         }
+                        break;
                     }
+                    }
+                    break;
                 }
             }
             WifiCmd::Disconnect => {

@@ -40,10 +40,12 @@ the console), **bluetooth** (connectable `PassportOS` + GATT Battery service;
 (UP/DOWN opens the factory used/free storage page).
 Wi-Fi credentials persist in the KV page (`POSW` record) and auto-join at boot.
 
-Unplugged, the backlight turns off after **30 s** with no keys (PWM 0, not RTC
-sleep). Any key restores the previous brightness without also moving the
-launcher, switching workspace, or reaching a game. Charging (USB host SOF or
-SOC rising) keeps the panel on; plugging in while blanked turns it back on.
+Unplugged, the backlight turns off after **30 s** with no keys, then the CPU
+light-sleeps in 200 ms RTC slices so the ADC ladder can be sampled on wake.
+Any key restores the previous brightness without also moving the launcher,
+switching workspace, or reaching a game. Charging (USB host SOF or SOC rising)
+keeps the panel on and skips the slice; plugging in while blanked turns it
+back on. Console `sleep light` / `sleep deep` stay the 2 s / 5 s demos.
 
 **Status bar**, left to right: **HH:MM**, radio, workspace dots, battery %
 (lightning when USB-C is supplying a host or SOC is rising). There is no
@@ -118,7 +120,7 @@ Facts live in `crates/passport-core/src/board.rs`. Do not duplicate them.
 
 | Function | Pin / bus | Notes |
 | --- | --- | --- |
-| ST7789P3 240×320 | SPI2 MOSI9 SCLK8 CS1 DC20, 40 MHz mode 0, invert-on | No MISO, no TE, no touch. RST tied high. |
+| ST7789P3 240×320 | SPI2 MOSI9 SCLK8 CS1 DC20, 80 MHz mode 0, invert-on | No MISO, no TE, no touch. RST tied high. |
 | Backlight PWM | GPIO21 LEDC | |
 | UP / DOWN / OK | GPIO0 ADC1_CH0 ladder | `{[0,150),[150,447),[447,1900)}` mV. One ADC1 only. |
 | I2C0 | SDA10 SCL7 | ES8311 `0x18`, CW2017 `0x63`. One bus only. |
@@ -150,8 +152,8 @@ real drivers. Host tests must call those types — not a copy of the ADC windows
 or paint path.
 
 The ST7789 GRAM **is** the framebuffer. The CPU sends dirty rectangles over SPI.
-A live frame must stay inside `LIVE_SPI_BUDGET` (8 KiB ≈ 1.6 ms at 40 MHz). A
-full 240×298 content fill is ~29 ms: it flashes the panel and starves the button
+A live frame must stay inside `LIVE_SPI_BUDGET` (8 KiB ≈ 0.8 ms at 80 MHz). A
+full 240×298 content fill is ~14 ms: it still outlasts one ADC sample and starves the button
 ladder. Scene changes may fill a tile; animation ticks must not. Buttons are
 sampled every **5 ms**; game sprites paint on the **20 ms** frame
 (`cadence_redraw`). Do not `println` on the per-sample key path.

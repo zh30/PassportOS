@@ -45,22 +45,67 @@ pub fn es8311_set_volume<I: I2c>(i2c: &mut I, vol: u8, muted: bool) -> Result<()
     )
 }
 
+/// Leave sleep, then clear the restart bit so the gauge reloads its profile.
+/// Datasheet: write `0x30`, then `0x00`. A short spin sits between the two writes.
 pub fn cw2017_wake<I: I2c>(i2c: &mut I) -> Result<(), I::Error> {
-    i2c.write(I2C_CW2017_ADDR, &[0x08, 0x00]) // CONFIG = normal
+    i2c.write(I2C_CW2017_ADDR, &[0x08, 0x30])?;
+    for _ in 0..160_000 {
+        core::hint::spin_loop();
+    }
+    i2c.write(I2C_CW2017_ADDR, &[0x08, 0x00])
 }
 
-pub fn cw2017_soc_mv<I: I2c>(i2c: &mut I) -> Option<(u8, u16)> {
-    let mut soc = [0u8; 2];
-    let mut vcell = [0u8; 2];
-    i2c.write_read(I2C_CW2017_ADDR, &[0x04], &mut soc).ok()?;
-    i2c.write_read(I2C_CW2017_ADDR, &[0x02], &mut vcell).ok()?;
-    let pct = soc[0];
-    if pct > 100 {
-        return None;
-    }
-    let raw = (u16::from(vcell[0]) << 8 | u16::from(vcell[1])) & 0x3FFF;
+fn cw_reg<I: I2c>(i2c: &mut I, reg: u8) -> Option<u8> {
+    let mut b = [0u8; 1];
+    i2c.write_read(I2C_CW2017_ADDR, &[reg], &mut b).ok()?;
+    Some(b[0])
+}
+
+/// Why a poll did not yield a percentage. Logged once, not every tick.
+pub enum Cw2017Fail {
+    /// Register read NACKed.
+    Io,
+    /// Gauge answered, but SOC is not a percentage yet (often `0xFF`).
+    Soc { soc: u8, frac: u8, vcell: u16, mode: u8 },
+}
+
+pub fn cw2017_soc_mv<I: I2c>(i2c: &mut I) -> Result<(u8, u16), Cw2017Fail> {
+    let soc = cw_reg(i2c, 0x04).ok_or(Cw2017Fail::Io)?;
+    let frac = cw_reg(i2c, 0x05).ok_or(Cw2017Fail::Io)?;
+    let vh = cw_reg(i2c, 0x02).ok_or(Cw2017Fail::Io)?;
+    let vl = cw_reg(i2c, 0x03).ok_or(Cw2017Fail::Io)?;
+    let mode = cw_reg(i2c, 0x08).unwrap_or(0);
+    let raw = (u16::from(vh) << 8 | u16::from(vl)) & 0x3FFF;
     let mv = (u32::from(raw) * 3125 / 10_000) as u16;
-    Some((pct, mv))
+    // 0 mV is the gauge mid-restart, not an empty cell. SOC above 100
+    // (often 0xFE) means the profile has not produced a percentage yet.
+    if soc > 100 || mv < 2500 {
+        return Err(Cw2017Fail::Soc {
+            soc,
+            frac,
+            vcell: raw,
+            mode,
+        });
+    }
+    Ok((soc, mv))
+}
+
+/// Voltage, temperature, and ID-pin raw value. The gauge has no current register.
+pub fn cw2017_diag<I: I2c>(i2c: &mut I) -> heapless::String<96> {
+    let mut s = heapless::String::new();
+    let temp = cw_reg(i2c, 0x06).unwrap_or(0xFF);
+    let idh = cw_reg(i2c, 0x0E).unwrap_or(0);
+    let idl = cw_reg(i2c, 0x0F).unwrap_or(0);
+    let vh = cw_reg(i2c, 0x02).unwrap_or(0);
+    let vl = cw_reg(i2c, 0x03).unwrap_or(0);
+    let vraw = (u16::from(vh) << 8 | u16::from(vl)) & 0x3FFF;
+    let mv = (u32::from(vraw) * 3125 / 10_000) as u16;
+    let id = (u16::from(idh) << 8 | u16::from(idl)) & 0x3FFF;
+    let _ = core::fmt::Write::write_fmt(
+        &mut s,
+        format_args!("[bat] v={mv}mV temp={temp:02x} id={id:#x}"),
+    );
+    s
 }
 
 pub fn i2c_scan_line<I: I2c>(i2c: &mut I) -> heapless::String<96> {

@@ -202,6 +202,20 @@ fn loud_floor_during_calibration_still_allows_later_shout() {
 }
 
 #[test]
+fn sustained_shout_clears_roar_floor() {
+    let mut pcm = [0u8; 64];
+    for c in pcm.chunks_exact_mut(4) {
+        c[..2].copy_from_slice(&8_000i16.to_le_bytes());
+        c[2..].copy_from_slice(&8_000i16.to_le_bytes());
+    }
+    let lv = pcm16_le_level_auto(&pcm);
+    assert!(
+        lv >= ROAR_LEVEL,
+        "a steady shout must clear the default roar floor, lv={lv}"
+    );
+}
+
+#[test]
 fn pcm16_level_auto_picks_live_channel() {
     let mut right = [0u8; 16];
     for c in right.chunks_exact_mut(4) {

@@ -17,7 +17,8 @@ pub const TYPICAL_RELEASED_MV: u16 = 3300;
 
 pub const LCD_W: u16 = 240;
 pub const LCD_H: u16 = 320;
-pub const LCD_SPI_HZ: u32 = 40_000_000;
+/// Panel clock. Firmware uses `ClockSource::Pll80m` — the XTAL source caps at 40 MHz.
+pub const LCD_SPI_HZ: u32 = 80_000_000;
 pub const LCD_SPI_MODE: u8 = 0;
 pub const LCD_INVERT: bool = true;
 

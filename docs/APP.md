@@ -15,7 +15,7 @@ All constants live in `crates/passport-core/src/board.rs`. Do not duplicate them
 
 | Function | Pin / bus | Notes |
 | --- | --- | --- |
-| Display ST7789P3 240×320 RGB565 | SPI2: MOSI **GPIO9**, SCLK **GPIO8**, CS **GPIO1**, DC **GPIO20**, 40 MHz, **mode 0**, invert-on | No MISO, no TE, no touch. RST is tied to 3.3 V (software `SWRESET`). |
+| Display ST7789P3 240×320 RGB565 | SPI2: MOSI **GPIO9**, SCLK **GPIO8**, CS **GPIO1**, DC **GPIO20**, 80 MHz, **mode 0**, invert-on | No MISO, no TE, no touch. RST is tied to 3.3 V (software `SWRESET`). |
 | Backlight PWM | **GPIO21** LEDC 5 kHz 10-bit | UART0 TX defaults to GPIO21 — never use UART0 as the console. |
 | Buttons UP / DOWN / OK | **GPIO0** ADC1_CH0 resistor ladder | Windows `{[0,150),[150,447),[447,1900)}` mV. Typical 0 / ~300 / ~595 / **3300 released**. Do **not** create a second ADC1 unit. Do **not** enable the internal pull-up. |
 | I2C0 | SDA **GPIO10**, SCL **GPIO7** | Shared by ES8311 and CW2017. Reuse this bus; never `I2c::new` a second time on I2C0. |
@@ -25,7 +25,7 @@ All constants live in `crates/passport-core/src/board.rs`. Do not duplicate them
 | USB Serial/JTAG | **GPIO18 / GPIO19** | Native ESP32-C3 USB. Console + flash. |
 | Wi-Fi | 2.4 GHz STA scan + connect + manage | System **wifi**: pick an AP (open nets join immediately; locked nets open the 3-key English IME) plus `rescan` / `disconnect` / `forget` rows. Joins persist to the KV page (`wifi.ssid/pass/open`, POSW record) and auto-join at boot; drops report a reason and a saved open net rejoins at most `REJOIN_MAX=3` times. |
 | BLE | connectable advertising `PassportOS` + GATT Battery service | On demand (`radio ble` / `radio off`). Centrals can read + subscribe to Battery Level (0x2A19). `BT*` on the status bar while a central is connected. ESP32-C3 has **no Bluetooth Classic**. |
-| Light / deep sleep | RTC timer wake | Deep sleep restarts the application. Unplugged **idle standby** (30 s, no keys) is only backlight PWM 0 — not this path. Any key restores brightness and is swallowed so it does not also fire UI. Charging (USB SOF / SOC-up) inhibits blanking. |
+| Light / deep sleep | RTC timer wake | Deep sleep restarts the application. Unplugged **idle standby** (30 s, no keys) is backlight PWM 0 plus `sleep_light` in 200 ms slices. `sleep light` / `sleep deep` stay the 2 s / 5 s console demos. Any key restores brightness and is swallowed so it does not also fire UI. Charging (USB SOF / SOC-up) inhibits blanking and the slice. |
 
 ### NFC (NTAG213) — on the card, not on the MCU
 
@@ -95,8 +95,8 @@ I2S or a 96 KB capture buffer.
 - `cx.audio` / `cx.radio` return `ApiError::Busy` if Wi-Fi, BLE, or audio
   already owns the SRAM. Do not call `ExclusiveManager` yourself.
 - No full-screen framebuffer. `Draw` is dirty rectangles over SPI.
-  Live animation must stay inside `LIVE_SPI_BUDGET` (8 KiB ≈ 1.6 ms at 40 MHz).
-  A 240×298 content fill is ~29 ms, flashes the ST7789, and starves the ADC.
+  Live animation must stay inside `LIVE_SPI_BUDGET` (8 KiB ≈ 0.8 ms at 80 MHz).
+  A 240×298 content fill is ~14 ms, still longer than one ADC sample.
 - `Store` keys are per-app; never write `cardid` (`0x356000`) or Recovery
   (`0x700000`).
 

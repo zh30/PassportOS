@@ -1,10 +1,39 @@
 //! ST7789P3 240×320, SPI mode 0, invert-on, vendor porch/gamma from the official BSP.
 
+use core::sync::atomic::{AtomicUsize, Ordering};
+
 use embedded_hal::delay::DelayNs;
 use embedded_hal::digital::OutputPin;
 use embedded_hal::spi::SpiBus;
 
 use crate::font::{FONT_H, FONT_W, glyph};
+
+static AUDIO_SERVICE: AtomicUsize = AtomicUsize::new(0);
+
+/// Firmware registers an I2S pump so a long fill can feed TX / drain RX
+/// without ending the SPI window. `None` clears it.
+pub fn set_audio_service(service: Option<fn()>) {
+    AUDIO_SERVICE.store(service.map(|f| f as usize).unwrap_or(0), Ordering::Relaxed);
+}
+
+fn service_audio() {
+    let ptr = AUDIO_SERVICE.load(Ordering::Relaxed);
+    if ptr != 0 {
+        let f: fn() = unsafe { core::mem::transmute(ptr) };
+        f();
+    }
+}
+
+/// 512 RGB565 pixels. Static so the 72 KB radio heap stays untouched.
+/// The UI task is the only painter.
+struct FillBuf(core::cell::UnsafeCell<[u8; 1024]>);
+unsafe impl Sync for FillBuf {}
+static FILL_BUF: FillBuf = FillBuf(core::cell::UnsafeCell::new([0; 1024]));
+
+/// One text run: up to a full 240 px row at 2× (20 cells × 12 × 16 × 2).
+struct SpanBuf(core::cell::UnsafeCell<[u8; 20 * 12 * 16 * 2]>);
+unsafe impl Sync for SpanBuf {}
+static SPAN_BUF: SpanBuf = SpanBuf(core::cell::UnsafeCell::new([0; 20 * 12 * 16 * 2]));
 
 pub const WIDTH: u16 = 240;
 pub const HEIGHT: u16 = 320;
@@ -121,7 +150,7 @@ where
         self.begin_pixels(x, y, x1, y1)?;
         let hi = (color >> 8) as u8;
         let lo = color as u8;
-        let mut buf = [0u8; 240]; // 120 pixels
+        let buf = unsafe { &mut *FILL_BUF.0.get() };
         for chunk in buf.chunks_exact_mut(2) {
             chunk[0] = hi;
             chunk[1] = lo;
@@ -129,9 +158,12 @@ where
         let total = (x1 - x + 1) as u32 * (y1 - y + 1) as u32;
         let mut left = total;
         while left > 0 {
-            let n = core::cmp::min(left, 120) as usize;
+            let n = core::cmp::min(left, 512) as usize;
             self.spi.write(&buf[..n * 2])?;
             left -= n as u32;
+            // Between chunks, while CS stays in data mode. Keeps I2S clocks
+            // alive across a playfield fill.
+            service_audio();
         }
         self.end_pixels()
     }
@@ -140,96 +172,94 @@ where
         self.fill_rect(0, 0, WIDTH, HEIGHT, color)
     }
 
-    pub fn draw_text(&mut self, mut x: u16, y: u16, text: &str, fg: u16, bg: u16) -> Result<(), E> {
-        for c in text.bytes() {
-            if x + FONT_W > WIDTH {
-                break;
-            }
-            self.draw_char(x, y, c, fg, bg)?;
-            x += FONT_W;
-        }
-        Ok(())
+    pub fn draw_text(&mut self, x: u16, y: u16, text: &str, fg: u16, bg: u16) -> Result<(), E> {
+        self.draw_text_scaled(x, y, text, fg, bg, 1)
     }
 
-    pub fn draw_text_2x(
+    pub fn draw_text_2x(&mut self, x: u16, y: u16, text: &str, fg: u16, bg: u16) -> Result<(), E> {
+        self.draw_text_scaled(x, y, text, fg, bg, 2)
+    }
+
+    /// One SPI window per run of whole glyphs. A clipped cell is skipped so
+    /// RAMWR length always matches the window (a short write 花屏s this panel).
+    fn draw_text_scaled(
         &mut self,
         mut x: u16,
         y: u16,
         text: &str,
         fg: u16,
         bg: u16,
+        scale: u16,
     ) -> Result<(), E> {
-        for c in text.bytes() {
-            if x + FONT_W * 2 > WIDTH {
+        let cell_w = FONT_W.saturating_mul(scale);
+        let cell_h = FONT_H.saturating_mul(scale);
+        if cell_w == 0 || cell_h == 0 || y >= HEIGHT {
+            return Ok(());
+        }
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if x.saturating_add(cell_w) > WIDTH {
                 break;
             }
-            self.draw_char_2x(x, y, c, fg, bg)?;
-            x += FONT_W * 2;
+            let room = ((WIDTH - x) / cell_w) as usize;
+            let pix = (cell_w as usize)
+                .saturating_mul(cell_h as usize)
+                .saturating_mul(2);
+            let buf_cap = if pix == 0 { 0 } else { (20 * 12 * 16 * 2) / pix };
+            let n = room.min(buf_cap).min(bytes.len() - i);
+            if n == 0 {
+                break;
+            }
+            self.blit_span(x, y, &bytes[i..i + n], fg, bg, scale)?;
+            x = x.saturating_add(cell_w.saturating_mul(n as u16));
+            i += n;
         }
         Ok(())
     }
 
-    fn draw_char(&mut self, x: u16, y: u16, c: u8, fg: u16, bg: u16) -> Result<(), E> {
-        if x >= WIDTH || y >= HEIGHT {
+    fn blit_span(
+        &mut self,
+        x: u16,
+        y: u16,
+        chars: &[u8],
+        fg: u16,
+        bg: u16,
+        scale: u16,
+    ) -> Result<(), E> {
+        let cell_w = FONT_W.saturating_mul(scale);
+        let cell_h = FONT_H.saturating_mul(scale);
+        let w = cell_w.saturating_mul(chars.len() as u16);
+        let h = cell_h;
+        if w == 0 || h == 0 || y.saturating_add(h) > HEIGHT || x.saturating_add(w) > WIDTH {
             return Ok(());
         }
-        let x1 = x.saturating_add(FONT_W - 1).min(WIDTH - 1);
-        let y1 = y.saturating_add(FONT_H - 1).min(HEIGHT - 1);
-        if x1 < x || y1 < y {
-            return Ok(());
-        }
-        let g = glyph(c);
-        let mut pixels = [0u8; 6 * 8 * 2];
+        let pixels = unsafe { &mut *SPAN_BUF.0.get() };
         let mut i = 0;
         for row in 0..FONT_H {
-            for col in 0..FONT_W {
-                let on = col < 5 && (g[col as usize] & (1 << row)) != 0;
-                let color = if on { fg } else { bg };
-                pixels[i] = (color >> 8) as u8;
-                pixels[i + 1] = color as u8;
-                i += 2;
-            }
-        }
-        // Window is always 6×8; skip if it would clip (avoids RAMWR length mismatch → 花屏).
-        if x1 - x + 1 != FONT_W || y1 - y + 1 != FONT_H {
-            return Ok(());
-        }
-        self.begin_pixels(x, y, x1, y1)?;
-        self.spi.write(&pixels)?;
-        self.end_pixels()
-    }
-
-    fn draw_char_2x(&mut self, x: u16, y: u16, c: u8, fg: u16, bg: u16) -> Result<(), E> {
-        let w = FONT_W * 2;
-        let h = FONT_H * 2;
-        if x >= WIDTH || y >= HEIGHT {
-            return Ok(());
-        }
-        let x1 = x.saturating_add(w - 1).min(WIDTH - 1);
-        let y1 = y.saturating_add(h - 1).min(HEIGHT - 1);
-        if x1 - x + 1 != w || y1 - y + 1 != h {
-            return Ok(());
-        }
-        let g = glyph(c);
-        let mut pixels = [0u8; 12 * 16 * 2];
-        let mut i = 0;
-        for row in 0..FONT_H {
-            for _dup_row in 0..2 {
-                for col in 0..FONT_W {
-                    let on = col < 5 && (g[col as usize] & (1 << row)) != 0;
-                    let color = if on { fg } else { bg };
-                    let hi = (color >> 8) as u8;
-                    let lo = color as u8;
-                    pixels[i] = hi;
-                    pixels[i + 1] = lo;
-                    pixels[i + 2] = hi;
-                    pixels[i + 3] = lo;
-                    i += 4;
+            for _dup_row in 0..scale {
+                for &c in chars {
+                    let g = glyph(c);
+                    for col in 0..FONT_W {
+                        let on = col < 5 && (g[col as usize] & (1 << row)) != 0;
+                        let color = if on { fg } else { bg };
+                        let hi = (color >> 8) as u8;
+                        let lo = color as u8;
+                        for _dup_col in 0..scale {
+                            pixels[i] = hi;
+                            pixels[i + 1] = lo;
+                            i += 2;
+                        }
+                    }
                 }
             }
         }
+        let x1 = x + w - 1;
+        let y1 = y + h - 1;
         self.begin_pixels(x, y, x1, y1)?;
-        self.spi.write(&pixels)?;
-        self.end_pixels()
+        self.spi.write(&pixels[..i])?;
+        self.end_pixels()?;
+        service_audio();
+        Ok(())
     }
 }
