@@ -1,4 +1,5 @@
-//! Local wall clock. No timezone and no NTP — firmware ticks seconds, USB sets HH:MM.
+//! Local wall clock. No timezone. USB sets HH:MM; Wi-Fi SNTP sets UTC seconds.
+//! The status bar shows that clock as `HH:MM` with no offset applied.
 
 use core::fmt::Write;
 use heapless::String;
@@ -31,6 +32,11 @@ impl Clock {
         }
         self.sod = Some(u32::from(h) * 3600 + u32::from(m) * 60);
         Ok(())
+    }
+
+    /// UTC unix seconds → seconds since midnight. The panel has no timezone.
+    pub fn set_unix(&mut self, unix: u32) {
+        self.sod = Some(unix % DAY_SECS);
     }
 
     pub fn set_minutes(&mut self, mins: u16) -> Result<(), ()> {

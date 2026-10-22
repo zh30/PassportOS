@@ -121,12 +121,15 @@ fn playfield_fill_exceeds_live_budget() {
         full > LIVE_SPI_BUDGET * 8,
         "full fill {full} vs budget {LIVE_SPI_BUDGET}"
     );
+    let full_us = spi_time_us(full);
     assert!(
-        spi_time_us(full) > 20_000,
-        "a content wipe must not fit in the 20 ms input period, got {} us",
-        spi_time_us(full)
+        full_us > 5_000,
+        "a content wipe must outlast one 5 ms ADC tick at 80 MHz, got {full_us} us"
     );
-    assert!(spi_time_us(LIVE_SPI_BUDGET) < 5_000);
+    assert!(
+        spi_time_us(LIVE_SPI_BUDGET) < 5_000,
+        "live budget must stay inside one ADC tick"
+    );
 }
 
 #[test]

@@ -74,7 +74,17 @@ impl App for BooApp {
     }
 
     fn on_mic(&mut self, _cx: &mut Cx<'_>, ev: MicEvent) {
+        let before = self.world.score;
+        let was_dead = self.world.state == BooState::Dead;
+        let playing = self.world.state == BooState::Playing;
         self.world.on_mic(ev);
+        if !was_dead && self.world.state == BooState::Dead {
+            esp_println::println!("[boo] die score={before}");
+        } else if self.world.score > before {
+            esp_println::println!("[boo] scare score={}", self.world.score);
+        } else if playing {
+            esp_println::println!("[boo] mute");
+        }
     }
 
     fn on_stop(&mut self, cx: &mut Cx<'_>) {

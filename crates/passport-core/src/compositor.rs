@@ -10,13 +10,16 @@ pub const TILES_PER_WORKSPACE: usize = 2;
 
 /// RGB565 bytes for a rectangle. ST7789 GRAM is the framebuffer; the CPU
 /// only ships this many bytes per fill. A 240×298 content wipe is 143 040 B
-/// ≈ 29 ms at 40 MHz — longer than the 20 ms input period.
+/// ≈ 14 ms at 80 MHz — longer than the 5 ms ADC tick, inside one 20 ms frame
+/// before command overhead.
 pub const fn rgb565_bytes(w: u16, h: u16) -> u32 {
     (w as u32).saturating_mul(h as u32).saturating_mul(2)
 }
 
-/// Ceiling on a live (non-scene) frame. 8 KiB ≈ 1.6 ms at 40 MHz SPI2, so
+/// Ceiling on a live (non-scene) frame. 8 KiB ≈ 0.8 ms at 80 MHz SPI2, so
 /// ADC sampling is never skipped for animation. Scene changes may exceed this.
+/// Not widened: live sprites already fit, and a larger budget would invite
+/// playfield wipes back onto the 5 ms tick.
 pub const LIVE_SPI_BUDGET: u32 = 8 * 1024;
 
 /// SPI time in microseconds for `bytes` at the panel clock (command overhead

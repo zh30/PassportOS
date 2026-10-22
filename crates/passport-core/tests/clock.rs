@@ -23,6 +23,15 @@ fn parse_and_format_roundtrip() {
 }
 
 #[test]
+fn unix_sets_utc_minutes() {
+    // 2023-11-14 22:13:20 UTC.
+    let mut c = Clock::new();
+    c.set_unix(1_700_000_000);
+    assert_eq!(c.hour_minute(), Some((22, 13)));
+    assert_eq!(c.minutes_of_day(), Some(22 * 60 + 13));
+}
+
+#[test]
 fn minute_tick_and_midnight_wrap() {
     let mut c = Clock::new();
     assert!(!c.add_secs(60), "unset clock must not tick");

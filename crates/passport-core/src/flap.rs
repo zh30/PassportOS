@@ -1,7 +1,7 @@
 //! Minimal Flappy Bird: gravity, one-button flap, two scrolling pipes.
 //!
 //! Paint is dirty rectangles. A live tick never refills the playfield — that
-//! 240×298 SPI fill is ~29 ms and both flashes the ST7789 and starves ADC.
+//! 240×298 SPI fill is ~14 ms at 80 MHz and still longer than the 5 ms ADC tick.
 
 use core::fmt::Write as _;
 
